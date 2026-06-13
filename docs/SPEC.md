@@ -4,15 +4,16 @@
 | Thành phần | Công nghệ | Phiên bản |
 |---|---|---|
 | Frontend | HTML5 + Vanilla CSS + Vanilla JS (SPA) | — |
-| Local DB | IndexedDB via Dexie.js | v3 |
+| Local DB | IndexedDB via Dexie.js | v4 |
 | Cloud DB | Supabase (PostgreSQL + Auth) | v2 |
 | Cloud Storage | Supabase Storage (bucket: payment_proofs) | — |
 | Charts | Chart.js | v4.4.0 |
 | Bill PNG | html2canvas | v1.4.1 |
 | QR Code | qrcode-generator | v1.4.4 |
 | Export Excel | SheetJS (xlsx) | v0.20.3 |
+| Email | EmailJS (free 200/tháng) | v4 |
 | Font | Google Fonts — Inter | 400-700 |
-| Hosting | Netlify (CI/CD từ GitHub) | — |
+| Hosting | GitHub Pages (CI/CD via GitHub Actions) | — |
 | Version Control | GitHub | — |
 
 ## Tại sao không dùng framework?
@@ -25,7 +26,7 @@
 
 ## Data Schema
 
-### IndexedDB (Dexie.js v3) — Local
+### IndexedDB (Dexie.js v4) — Local
 
 #### customers
 ```
@@ -79,7 +80,9 @@
 ```
 key (primary), value
 ```
-Keys: password, ticketTiers, shopName, shopPhone, shopZalo, ctvList, supabaseUrl, supabaseKey, supabaseEmail, supabasePassword
+Keys: password, ticketTiers, shopName, shopPhone, shopZalo, ctvList, supabaseUrl, supabaseKey, supabaseEmail, supabasePassword, lastBackup
+
+> **Lưu ý:** `supabaseUrl` và `supabaseKey` đã được hardcode trong `sync.js` (DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_KEY). Nếu settings bị xóa (do xóa cache), hệ thống tự phục hồi từ defaults.
 
 #### resales
 ```

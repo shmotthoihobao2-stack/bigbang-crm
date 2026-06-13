@@ -1,5 +1,5 @@
 # JOURNEY — BigBang CRM
-> Bắt đầu: 2026-06-11 | Phiên bản hiện tại: v20+ | Trạng thái: Production
+> Bắt đầu: 2026-06-11 | Phiên bản hiện tại: DB v4 | Trạng thái: Production
 
 ---
 
@@ -7,7 +7,7 @@
 - **Vanilla HTML/CSS/JS** thay vì React/Next.js: ưu tiên tốc độ triển khai, không cần build step
 - **IndexedDB (Dexie.js)** cho offline-first local storage
 - **Supabase** cho cloud sync 2 chiều (thêm sau Phase 1)
-- **Netlify** CI/CD tự động deploy từ GitHub
+- **GitHub Pages** để deploy (thay Netlify vì hết credits)
 
 ---
 
@@ -25,7 +25,7 @@
 
 ### Phase 2 — Cloud Sync (12/06/2026)
 - Tích hợp Supabase (PostgreSQL + Auth)
-- Đồng bộ 2 chiều: Local ↔ Cloud mỗi 30 giây
+- Đồng bộ 2 chiều: Local ↔ Cloud mỗi 30 giây + Realtime
 - Outbox queue (ghi local trước, đẩy cloud sau)
 - UUID mapping giữa local ID và cloud UUID
 - Trang tra cứu đơn công khai (tracuu.html)
@@ -49,40 +49,56 @@
 ### Kaizen 3.5 — Thêm trường Email (13/06/2026)
 - Thêm ô Email khách hàng vào form tạo đơn
 - Mục đích: gửi vé QR cho khách sau này
-- DB migration v3, sync cloud đầy đủ
+- DB migration v3 → v4 (fix conflict Dexie schema)
+- Sync cloud đầy đủ
 - **Yêu cầu SQL Supabase:**
   ```sql
   ALTER TABLE public.customers ADD COLUMN email text DEFAULT '';
   ```
 
+### Kaizen 4 — Gửi Vé Qua Email (13/06/2026)
+- Tích hợp EmailJS (free 200 email/tháng, reset 13/07)
+- Email gửi từ: `vebigbang2026@gmail.com`
+- Nút "📧 Gửi vé Email" trong chi tiết đơn (tím gradient)
+- Tự động điền thông tin đơn hàng vào email template
+- Service ID: `service_c2q6n7f`
+- Template ID: `template_thvt726`
+- Public Key: `lhJZwyjgcDzYQM7uc`
+
 ---
 
-## Bug đã fix (13/06/2026)
+## Bug đã fix
 
-| Bug | Nguyên nhân | Cách sửa |
-|---|---|---|
-| Thanh tìm kiếm trùng 2 cái | HTML có 2 input cùng id `order-search` | Xóa cái thừa |
-| Chart.js load 2 lần | Load ở `<head>` và cuối `<body>` | Xóa bản trùng |
-| Tab Orders active cùng Dashboard | HTML đặt `class="active"` nhầm | Xóa active |
-| Service Worker cache cứng đầu | SW lưu bộ nhớ đệm cũ không chịu cập nhật | Gỡ bỏ SW, thêm script xóa cache |
-| Netlify deploy fail | 3 submodule hỏng trong repo Git | Gỡ submodule khỏi Git index |
+| Ngày | Bug | Nguyên nhân | Cách sửa |
+|---|---|---|---|
+| 13/06 | Thanh tìm kiếm trùng 2 cái | HTML có 2 input cùng id | Xóa cái thừa |
+| 13/06 | Chart.js load 2 lần | Load ở `<head>` và cuối `<body>` | Xóa bản trùng |
+| 13/06 | Tab Orders active cùng Dashboard | HTML đặt `class="active"` nhầm | Xóa active |
+| 13/06 | Service Worker cache cứng đầu | SW lưu bộ nhớ đệm cũ | Gỡ bỏ SW |
+| 13/06 | Netlify deploy fail | 3 submodule hỏng trong repo Git | Gỡ submodule |
+| 13/06 | Email không sync giữa thiết bị | Dexie v3 conflict giữa app.js và sync.js | Nâng lên v4 thống nhất |
+| 13/06 | Xóa cache mất Supabase credentials | URL/Key lưu trong IndexedDB | Hardcode vào sync.js |
+| 13/06 | Netlify hết credits | Free tier hết 300 build | Chuyển sang GitHub Pages |
 
 ---
 
 ## Cấu hình hiện tại
 
 ### Hosting
-- **Netlify site:** `ve-bigbang-vip.netlify.app`
-- **CI/CD:** Tự động deploy khi push lên GitHub `main` branch
-- **Publish directory:** `bigbang-crm`
-- **Build command:** (trống — static site)
+- **GitHub Pages:** `shmotthoihobao2-stack.github.io/bigbang-crm/`
+- **Repo riêng:** `shmotthoihobao2-stack/bigbang-crm` (Public)
+- **CI/CD:** GitHub Actions — tự deploy khi push lên `main`
+- **Netlify (cũ):** `ve-bigbang-vip.netlify.app` — hết credits, không dùng nữa
 
 ### Cloud Database
-- **Supabase Project URL:** Lưu trong app Settings (user tự nhập)
-- **Tables:** `customers`, `orders`, `inventory`, `settings`
+- **Supabase Project URL:** `https://satcrqkyxrrioctncokv.supabase.co` (hardcode trong sync.js)
+- **Tables:** `customers`, `orders`, `inventory`, `resales`, `app_settings`
 - **Storage bucket:** `payment_proofs` (Public, cần RLS Policy INSERT)
 
-### GitHub
-- **Repo:** `shmotthoihobao2-stack/BT1-backup`
-- **Branch:** `main`
-- **Thư mục CRM:** `bigbang-crm/`
+### Email Service
+- **EmailJS:** Free 200 email/tháng
+- **Email gửi:** `vebigbang2026@gmail.com`
+
+### GitHub Repos
+- **Repo CRM (riêng, Public):** `shmotthoihobao2-stack/bigbang-crm`
+- **Repo gốc (Private):** `shmotthoihobao2-stack/BT1-backup` — chứa các dự án khác, KHÔNG public
