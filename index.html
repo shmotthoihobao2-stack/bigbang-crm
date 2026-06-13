@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Mini-CRM Quản Lý Bán Vé Concert BigBang 2026 — SVĐ Mỹ Đình">
+  <meta name="theme-color" content="#0a0a14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>BigBang CRM — Quản Lý Vé Concert</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // ÉP BUỘC XÓA CACHE VÀ SERVICE WORKER ĐỂ UPDATE TRỰC TIẾP
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for(let registration of registrations) {
+          registration.unregister();
+        }
+      });
+      caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
+    }
+  </script>
+  <!-- Dexie.js for IndexedDB -->
+  <script src="https://unpkg.com/dexie@3/dist/dexie.js"></script>
+  <!-- html2canvas for bill PNG -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <!-- Chart.js for dashboard -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <!-- Supabase (đồng bộ cloud — không cấu hình thì app vẫn chạy local) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- QRCode.js for bill QR -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+  <!-- EmailJS for sending ticket confirmation emails -->
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+  <script>emailjs.init('lhJZwyjgcDzYQM7uc');</script>
+</head>
+<body>
+
+  <!-- ============================== -->
+  <!-- LOGIN SCREEN                   -->
+  <!-- ============================== -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-box">
+      <span class="login-crown">👑</span>
+      <h1>BIGBANG CRM</h1>
+      <p class="subtitle">Quản lý vé Concert BigBang 2026<br>SVĐ Mỹ Đình — 24 & 25/10</p>
+      <div class="login-input-group">
+        <input type="password" id="login-password" placeholder="Nhập mật khẩu..." autocomplete="off">
+      </div>
+      <div class="login-error" id="login-error"></div>
+      <button class="btn btn-gold btn-block btn-lg" id="login-btn" onclick="handleLogin()">
+        Đăng nhập
+      </button>
+      <p class="text-muted mt-md" id="default-pwd-hint" style="font-size:0.72rem">Lần đầu? Mật khẩu mặc định: <strong>bigbang2026</strong></p>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- APP CONTAINER                  -->
+  <!-- ============================== -->
+  <div id="app" class="app-container">
+
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="app-logo">
+        <span class="logo-crown">👑</span>
+        <h1>BIGBANG CRM</h1>
+      </div>
+      <div class="header-actions">
+        <span class="sync-dot" id="sync-dot" data-state="local" onclick="manualSync()" title="Chế độ local"></span>
+        <button class="btn btn-sm btn-secondary" onclick="handleLogout()" title="Đăng xuất">
+          🚪
+        </button>
+      </div>
+    </header>
+
+    <!-- BOTTOM NAV (mobile) / TOP NAV (desktop) -->
+    <nav class="bottom-nav" id="bottom-nav">
+      <button class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard')">
+        <span class="nav-icon">📊</span>
+        <span>Tổng quan</span>
+      </button>
+      <button class="nav-item" data-tab="orders" onclick="switchTab('orders')">
+        <span class="nav-icon">🎫</span>
+        <span>Đơn hàng</span>
+      </button>
+      <button class="nav-item" data-tab="inventory" onclick="switchTab('inventory')">
+        <span class="nav-icon">📦</span>
+        <span>Tồn kho</span>
+      </button>
+      <button class="nav-item" data-tab="followup" onclick="switchTab('followup')">
+        <span class="nav-icon">🔔</span>
+        <span>Cần xử lý</span>
+        <span class="nav-badge hidden" id="followup-badge">0</span>
+      </button>
+      <button class="nav-item" data-tab="resale" onclick="switchTab('resale')">
+        <span class="nav-icon">🔁</span>
+        <span>Pass vé</span>
+        <span class="nav-badge hidden" id="resale-badge">0</span>
+      </button>
+      <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">
+        <span class="nav-icon">⚙️</span>
+        <span>Cài đặt</span>
+      </button>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="app-main">
+
+      <!-- ========== TAB: DASHBOARD ========== -->
+      <div id="tab-dashboard" class="tab-panel active">
+        <h2 class="page-title"><span class="title-icon">📊</span> Tổng quan</h2>
+
+        <!-- Countdown tới concert -->
+        <div id="countdown-banner" class="countdown-banner"></div>
+
+        <!-- Backup reminder banner -->
+        <div id="backup-banner" class="backup-banner hidden">
+          <span id="backup-banner-text"></span>
+          <button class="btn btn-sm btn-gold" onclick="exportAllData()">💾 Backup ngay</button>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid" id="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">🎫</div>
+            <div class="stat-value" id="stat-total-orders">0</div>
+            <div class="stat-label">Đơn đã chốt</div>
+            <div class="stat-note" id="stat-pipeline-note"></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💰</div>
+            <div class="stat-value" id="stat-revenue">0đ</div>
+            <div class="stat-label">Doanh thu (đơn đã chốt)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🏦</div>
+            <div class="stat-value" id="stat-deposit">0đ</div>
+            <div class="stat-label">Tiền thực đã thu</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">⏳</div>
+            <div class="stat-value" id="stat-remaining">0đ</div>
+            <div class="stat-label">Còn phải thu</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📈</div>
+            <div class="stat-value" id="stat-profit">0đ</div>
+            <div class="stat-label">Lợi nhuận tạm tính</div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div style="display:flex;gap:var(--space-md);margin-top:var(--space-lg);flex-wrap:wrap">
+          <div class="card" style="flex:1;min-width:300px;">
+            <div class="card-header">
+              <span class="card-title">Doanh thu theo ngày</span>
+            </div>
+            <div class="chart-container" style="height:250px">
+              <canvas id="chart-orders-by-date"></canvas>
+            </div>
+          </div>
+          <div class="card" style="flex:1;min-width:300px;">
+            <div class="card-header">
+              <span class="card-title">Tỷ trọng Hạng vé</span>
+            </div>
+            <div class="chart-container" style="height:250px;display:flex;justify-content:center">
+              <canvas id="chart-tier"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== TAB: ORDERS ========== -->
+      <div id="tab-orders" class="tab-panel">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--space-md)">
+          <h2 class="page-title" style="margin:0"><span class="title-icon">🎟️</span> Đơn hàng</h2>
+          <button class="btn btn-gold" onclick="openOrderModal()">+ Tạo đơn mới</button>
+        </div>
+
+        <!-- Thanh tìm kiếm -->
+        <div class="form-row mb-md">
+          <div style="flex:1; position:relative">
+            <span style="position:absolute; left:12px; top:10px; opacity:0.5">🔍</span>
+            <input type="text" id="order-search" class="form-input" placeholder="Tìm tên khách, số điện thoại hoặc mã đơn..." style="padding-left:36px" oninput="filterOrders()">
+          </div>
+        </div>
+
+
+        <!-- Status filter chips -->
+        <div class="order-filters" id="order-filters">
+          <button class="filter-chip active" data-filter="all" onclick="setStatusFilter('all')">
+            Tất cả <span class="chip-count" id="count-all">0</span>
+          </button>
+          <button class="filter-chip" data-filter="mới" onclick="setStatusFilter('mới')">
+            Mới <span class="chip-count" id="count-mới">0</span>
+          </button>
+          <button class="filter-chip" data-filter="đã cọc" onclick="setStatusFilter('đã cọc')">
+            Đã cọc <span class="chip-count" id="count-đã cọc">0</span>
+          </button>
+          <button class="filter-chip" data-filter="đã thanh toán đủ" onclick="setStatusFilter('đã thanh toán đủ')">
+            Đã TT đủ <span class="chip-count" id="count-đã thanh toán đủ">0</span>
+          </button>
+          <button class="filter-chip" data-filter="đã giao vé" onclick="setStatusFilter('đã giao vé')">
+            Đã giao <span class="chip-count" id="count-đã giao vé">0</span>
+          </button>
+          <button class="filter-chip" data-filter="hoàn cọc" onclick="setStatusFilter('hoàn cọc')">
+            Hoàn cọc <span class="chip-count" id="count-hoàn cọc">0</span>
+          </button>
+          <button class="filter-chip" data-filter="hủy" onclick="setStatusFilter('hủy')">
+            Hủy <span class="chip-count" id="count-hủy">0</span>
+          </button>
+        </div>
+
+        <!-- Extra filters -->
+        <div class="form-row mb-md">
+          <div>
+            <select class="form-select" id="filter-day" onchange="filterOrders()">
+              <option value="">Tất cả ngày</option>
+              <option value="day1">Day 1 (24/10)</option>
+              <option value="day2">Day 2 (25/10)</option>
+              <option value="both">Cả 2 ngày</option>
+            </select>
+          </div>
+          <div>
+            <select class="form-select" id="filter-tier" onchange="filterOrders()">
+              <option value="">Tất cả hạng</option>
+              <!-- Dynamically populated -->
+            </select>
+          </div>
+        </div>
+
+        <!-- Order list -->
+        <div id="orders-list">
+          <div class="empty-state">
+            <span class="empty-icon">🎫</span>
+            <p class="empty-text">Chưa có đơn hàng nào</p>
+            <button class="btn btn-gold" onclick="openOrderModal()">Thêm đơn đầu tiên</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== TAB: INVENTORY ========== -->
+      <div id="tab-inventory" class="tab-panel">
+        <h2 class="page-title"><span class="title-icon">📦</span> Tồn kho</h2>
+
+        <!-- Overstock warnings -->
+        <div id="overstock-warnings"></div>
+
+        <!-- Day 1 -->
+        <div class="card mb-lg">
+          <div class="card-header">
+            <span class="card-title">🎤 Day 1 — 24/10/2026</span>
+          </div>
+          <div class="inventory-grid" id="inventory-day1">
+            <div class="inventory-row header">
+              <span>Hạng vé</span>
+              <span>Tổng</span>
+              <span>Đã bán</span>
+              <span>Còn lại</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Day 2 -->
+        <div class="card mb-lg">
+          <div class="card-header">
+            <span class="card-title">🎶 Day 2 — 25/10/2026</span>
+          </div>
+          <div class="inventory-grid" id="inventory-day2">
+            <div class="inventory-row header">
+              <span>Hạng vé</span>
+              <span>Tổng</span>
+              <span>Đã bán</span>
+              <span>Còn lại</span>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary btn-block" onclick="openInventoryModal()">
+          ✏️ Chỉnh sửa tồn kho
+        </button>
+      </div>
+
+      <!-- ========== TAB: FOLLOW-UP ========== -->
+      <div id="tab-followup" class="tab-panel">
+        <h2 class="page-title"><span class="title-icon">🔔</span> Cần xử lý</h2>
+
+        <!-- Đơn mới quá 24h chưa cọc -->
+        <div class="followup-section">
+          <div class="followup-section-title">
+            <span class="icon">⏰</span>
+            Đơn mới quá 24h — chưa cọc
+          </div>
+          <div id="followup-new-24h">
+            <div class="followup-empty">
+              <span class="empty-icon">✅</span>
+              Không có đơn nào cần xử lý
+            </div>
+          </div>
+        </div>
+
+        <!-- Đơn đã cọc gần ngày show chưa TT đủ -->
+        <div class="followup-section">
+          <div class="followup-section-title">
+            <span class="icon">💳</span>
+            Đã cọc — chưa thanh toán đủ (gần ngày show)
+          </div>
+          <div id="followup-unpaid">
+            <div class="followup-empty">
+              <span class="empty-icon">✅</span>
+              Không có đơn nào cần xử lý
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== TAB: PASS VÉ / KÝ GỬI ========== -->
+      <div id="tab-resale" class="tab-panel">
+        <div class="flex-between mb-md">
+          <h2 class="page-title" style="margin-bottom:0"><span class="title-icon">🔁</span> Pass vé ký gửi</h2>
+          <button class="btn btn-gold btn-sm" onclick="openResaleModal()">+ Nhận ký gửi</button>
+        </div>
+        <p class="text-muted mb-md" style="font-size:0.8rem">Khách không đi được hoặc muốn đổi hạng → nhận ký gửi, rao pass hộ, thu phí dịch vụ. Pass xong bấm "Tạo đơn khách mua" để vé đi tiếp vào hệ thống.</p>
+        <div id="resale-summary"></div>
+        <div id="resales-list"></div>
+      </div>
+
+      <!-- ========== TAB: SETTINGS ========== -->
+      <div id="tab-settings" class="tab-panel">
+        <h2 class="page-title"><span class="title-icon">⚙️</span> Cài đặt</h2>
+
+        <!-- Thông tin shop -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">🏪 Thông tin shop</h3>
+          <div class="form-group">
+            <label class="form-label">Tên shop</label>
+            <input type="text" class="form-input" id="setting-shop-name" value="BigBang Ticket VN" onchange="saveSetting('shopName', this.value)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">SĐT liên hệ</label>
+            <input type="text" class="form-input" id="setting-shop-phone" placeholder="0xxx xxx xxx" onchange="saveSetting('shopPhone', this.value)">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Zalo shop</label>
+            <input type="text" class="form-input" id="setting-shop-zalo" placeholder="Link hoặc số Zalo" onchange="saveSetting('shopZalo', this.value)">
+          </div>
+        </div>
+
+        <!-- Hạng vé -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">🎫 Hạng vé</h3>
+          <p class="text-muted mb-md" style="font-size:0.8rem">Thêm/xóa hạng vé tùy ý. Thay đổi sẽ áp dụng cho đơn mới.</p>
+          <div class="tier-list" id="tier-list">
+            <!-- Dynamically rendered -->
+          </div>
+          <div class="form-row">
+            <div>
+              <input type="text" class="form-input" id="new-tier-name" placeholder="Tên hạng vé mới...">
+            </div>
+            <div>
+              <button class="btn btn-gold btn-block" onclick="addTier()">+ Thêm hạng</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CTV Management -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">👥 Cộng tác viên (CTV)</h3>
+          <div id="ctv-list">
+            <!-- Dynamically rendered -->
+          </div>
+          <div class="form-row mt-md">
+            <div>
+              <input type="text" class="form-input" id="new-ctv-name" placeholder="Tên CTV...">
+            </div>
+            <div>
+              <button class="btn btn-secondary btn-block" onclick="addCTV()">+ Thêm CTV</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Đổi mật khẩu -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">🔐 Đổi mật khẩu</h3>
+          <div class="form-group">
+            <label class="form-label">Mật khẩu mới</label>
+            <input type="password" class="form-input" id="new-password" placeholder="Nhập mật khẩu mới...">
+          </div>
+          <button class="btn btn-primary" onclick="changePassword()">Đổi mật khẩu</button>
+        </div>
+
+        <!-- Cloud Sync -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">☁️ Đồng bộ cloud (Supabase)</h3>
+          <p class="text-muted mb-md" style="font-size:0.8rem">
+            Nhập email + mật khẩu tài khoản Supabase là xong — URL và key đã được cài sẵn.
+          </p>
+          <!-- URL và Key đã hardcode trong sync.js — không cần nhập lại -->
+          <input type="hidden" id="sb-url">
+          <input type="hidden" id="sb-key">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Email đăng nhập</label>
+              <input type="email" class="form-input" id="sb-email" placeholder="shop@email.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mật khẩu</label>
+              <input type="password" class="form-input" id="sb-password" placeholder="••••••••">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-gold" onclick="setupSupabase()">🔗 Kết nối & đồng bộ</button>
+            <button class="btn btn-secondary" onclick="manualSync()">🔄 Đồng bộ ngay</button>
+            <button class="btn btn-danger" onclick="disconnectSupabase()">Ngắt kết nối</button>
+          </div>
+          <p class="form-hint mt-sm" id="sync-status-text">Chế độ local (chưa bật đồng bộ cloud)</p>
+        </div>
+
+        <!-- Export -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">📤 Xuất dữ liệu</h3>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="exportCSV()">📊 Export Excel</button>
+            <button class="btn btn-secondary" onclick="exportAllData()">💾 Backup toàn bộ</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('import-file').click()">📥 Import backup</button>
+            <input type="file" id="import-file" accept=".json" style="display:none" onchange="importAllData(event)">
+          </div>
+        </div>
+
+        <!-- Thùng rác -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">🗑️ Thùng rác</h3>
+          <p class="text-muted mb-md" style="font-size:0.8rem">Đơn hàng đã xóa sẽ nằm ở đây 30 ngày trước khi bị xóa vĩnh viễn. Bấm vào đơn để khôi phục.</p>
+          <div id="trash-list" style="max-height:300px;overflow-y:auto"></div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-secondary" onclick="refreshTrash()">🔄 Tải lại</button>
+            <button class="btn btn-danger" onclick="emptyTrash()">🗑️ Dọn sạch thùng rác</button>
+          </div>
+        </div>
+
+        <!-- Seed data -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">🧪 Dữ liệu mẫu</h3>
+          <button class="btn btn-danger" onclick="confirmSeedData()">⚡ Tạo 10 đơn mẫu (demo)</button>
+          <p class="form-hint mt-sm">Sẽ xóa toàn bộ dữ liệu hiện tại và thay bằng dữ liệu demo.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- FAB — Quick Add Order -->
+    <button class="fab" id="fab-add" onclick="openOrderModal()" title="Thêm đơn nhanh">
+      ＋
+    </button>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: ADD/EDIT ORDER          -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="order-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="order-modal-title">Thêm đơn mới</h3>
+        <button class="modal-close" onclick="tryCloseOrderModal()">✕</button>
+      </div>
+
+      <form id="order-form" onsubmit="saveOrder(event)">
+        <input type="hidden" id="edit-order-id" value="">
+
+        <!-- Phone — auto lookup -->
+        <div class="form-group">
+          <label class="form-label">Số điện thoại <span id="phone-autofill-badge"></span></label>
+          <input type="tel" class="form-input" id="order-phone" placeholder="0xxx xxx xxx" required maxlength="11" oninput="lookupCustomer(this.value)">
+          <div class="form-hint">Nhập SĐT → tự động điền nếu khách cũ</div>
+        </div>
+
+        <!-- Customer Name -->
+        <div class="form-group">
+          <label class="form-label">Tên khách / Nickname</label>
+          <input type="text" class="form-input" id="order-name" placeholder="Tên khách hàng" required>
+        </div>
+
+        <!-- Zalo -->
+        <div class="form-group">
+          <label class="form-label">Zalo</label>
+          <input type="text" class="form-input" id="order-zalo" placeholder="Link / Số Zalo">
+        </div>
+
+        <!-- Email -->
+        <div class="form-group">
+          <label class="form-label">📧 Email (để gửi vé QR)</label>
+          <input type="email" class="form-input" id="order-email" placeholder="khach@email.com">
+        </div>
+
+        <!-- Social -->
+        <div class="form-group">
+          <label class="form-label">Threads / Facebook</label>
+          <input type="text" class="form-input" id="order-social" placeholder="Link profile">
+        </div>
+
+        <!-- Source -->
+        <div class="form-group">
+          <label class="form-label">Nguồn khách</label>
+          <select class="form-select" id="order-source">
+            <option value="threads">Threads</option>
+            <option value="fb_group">Facebook Group</option>
+            <option value="zalo" selected>Zalo</option>
+            <option value="referral">Giới thiệu</option>
+            <option value="khác">Khác</option>
+          </select>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-subtle);margin:var(--space-lg) 0">
+
+        <!-- Show Day -->
+        <div class="form-group">
+          <label class="form-label">Ngày diễn</label>
+          <select class="form-select" id="order-day" required onchange="checkInventory()">
+            <option value="">-- Chọn ngày --</option>
+            <option value="day1">Day 1 — 24/10/2026</option>
+            <option value="day2">Day 2 — 25/10/2026</option>
+            <option value="both">Cả 2 ngày</option>
+          </select>
+        </div>
+
+        <!-- Ticket Tier -->
+        <div class="form-group">
+          <label class="form-label">Hạng vé</label>
+          <select class="form-select" id="order-tier" required onchange="checkInventory()">
+            <option value="">-- Chọn hạng --</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+
+        <!-- Quantity + Unit Price -->
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Số lượng</label>
+            <input type="number" class="form-input" id="order-qty" value="1" min="1" required oninput="calcTotal()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Đơn giá (VNĐ)</label>
+            <input type="text" class="form-input" id="order-price" placeholder="0" oninput="formatMoneyInput(this)" inputmode="numeric">
+          </div>
+        </div>
+
+        <!-- Inventory warning -->
+        <div id="inventory-warning" class="overstock-warning hidden">
+          <span class="warn-icon">⚠️</span>
+          <span class="warn-text" id="inventory-warning-text"></span>
+        </div>
+
+        <!-- Seat number -->
+        <div class="form-group">
+          <label class="form-label">Số ghế / vị trí</label>
+          <input type="text" class="form-input" id="order-seat" placeholder="VD: A1, A2 hoặc Khu B Hàng 3 Ghế 15-16">
+          <div class="form-hint">Ghi rõ số ghế để giao đúng vé cho khách</div>
+        </div>
+
+        <!-- Combo / dịch vụ kèm -->
+        <div class="form-group">
+          <label class="form-label">Dịch vụ kèm (Combo)</label>
+          <input type="text" class="form-input" id="order-combo" placeholder="VD: Bay VJ 24/10 + KS Marriott 2 đêm" list="combo-list">
+          <datalist id="combo-list"></datalist>
+          <div class="form-hint">Nếu đơn có kèm vé máy bay, khách sạn, shuttle... ghi tại đây</div>
+        </div>
+
+        <!-- Total (computed) -->
+        <div class="form-group">
+          <label class="form-label">Tổng tiền</label>
+          <input type="text" class="form-input" id="order-total" readonly style="font-weight:700;color:var(--text-gold)">
+        </div>
+
+        <!-- Deposit -->
+        <div class="form-group">
+          <label class="form-label">Tiền cọc</label>
+          <input type="text" class="form-input" id="order-deposit" placeholder="0" inputmode="numeric" oninput="formatMoneyInput(this)">
+        </div>
+
+        <!-- Status -->
+        <div class="form-group">
+          <label class="form-label">Trạng thái</label>
+          <select class="form-select" id="order-status">
+            <option value="mới">Mới</option>
+            <option value="đã cọc">Đã cọc</option>
+            <option value="đã thanh toán đủ">Đã thanh toán đủ</option>
+            <option value="đã giao vé">Đã giao vé</option>
+            <option value="hoàn cọc">Hoàn cọc</option>
+            <option value="hủy">Hủy</option>
+          </select>
+        </div>
+
+        <!-- Delivery method -->
+        <div class="form-group">
+          <label class="form-label">Hình thức giao</label>
+          <select class="form-select" id="order-delivery">
+            <option value="giao tận tay">Giao tận tay</option>
+            <option value="gửi ship">Gửi ship</option>
+            <option value="e-ticket">E-ticket</option>
+            <option value="nhận tại sân">Nhận tại sân</option>
+          </select>
+        </div>
+
+        <!-- CTV -->
+        <div class="form-group">
+          <label class="form-label">CTV phụ trách</label>
+          <select class="form-select" id="order-ctv">
+            <option value="">-- Không --</option>
+            <!-- Dynamically populated -->
+          </select>
+        </div>
+
+        <!-- Ticket source -->
+        <div class="form-group">
+          <label class="form-label">Nguồn vé</label>
+          <input type="text" class="form-input" id="order-ticket-source" list="ticket-source-list" placeholder="VD: BTC, Đại lý A, Pass lại...">
+          <datalist id="ticket-source-list"></datalist>
+          <div class="form-hint">Vé lấy từ nguồn nào (BTC, đại lý, pass...)</div>
+        </div>
+
+        <!-- Note -->
+        <div class="form-group">
+          <label class="form-label">Ghi chú</label>
+          <textarea class="form-textarea" id="order-note" placeholder="Ghi chú thêm..."></textarea>
+        </div>
+
+        <!-- Actions -->
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="tryCloseOrderModal()">Hủy</button>
+          <button type="submit" class="btn btn-gold">💾 Lưu đơn</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: ORDER DETAIL            -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="detail-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="detail-modal-title">Chi tiết đơn</h3>
+        <button class="modal-close" onclick="closeDetailModal()">✕</button>
+      </div>
+      <div id="detail-modal-body"></div>
+      <div class="modal-actions" id="detail-modal-actions"></div>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: BILL PREVIEW            -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="bill-modal">
+    <div class="modal" style="max-width:450px">
+      <div class="modal-header">
+        <h3 class="modal-title">📃 Bill xác nhận</h3>
+        <button class="modal-close" onclick="closeBillModal()">✕</button>
+      </div>
+      <div id="bill-content"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeBillModal()">Đóng</button>
+        <button class="btn btn-secondary" onclick="shareBill()">📤 Chia sẻ</button>
+        <button class="btn btn-secondary" onclick="copyBill()">📋 Copy ảnh</button>
+        <button class="btn btn-gold" onclick="downloadBill()">📥 Tải PNG</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: RESALE / KÝ GỬI         -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="resale-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">🔁 Nhận ký gửi pass vé</h3>
+        <button class="modal-close" onclick="closeResaleModal()">✕</button>
+      </div>
+      <form id="resale-form" onsubmit="saveResale(event)">
+        <input type="hidden" id="edit-resale-id" value="">
+
+        <div class="form-group">
+          <label class="form-label">Đơn gốc (nếu khách mua tại shop)</label>
+          <select class="form-select" id="resale-order" onchange="resaleOrderPicked()">
+            <option value="">— Khách ngoài / nhập tay —</option>
+          </select>
+          <div class="form-hint">Chọn đơn → tự điền thông tin khách và vé</div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Tên khách</label>
+            <input type="text" class="form-input" id="resale-name" placeholder="Tên khách" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">SĐT</label>
+            <input type="tel" class="form-input" id="resale-phone" placeholder="0xxx xxx xxx" maxlength="11">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Ngày diễn</label>
+            <select class="form-select" id="resale-day" required>
+              <option value="">-- Chọn --</option>
+              <option value="day1">Day 1 — 24/10</option>
+              <option value="day2">Day 2 — 25/10</option>
+              <option value="both">Cả 2 ngày</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Hạng vé</label>
+            <select class="form-select" id="resale-tier" required>
+              <option value="">-- Chọn hạng --</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Số lượng</label>
+            <input type="number" class="form-input" id="resale-qty" value="1" min="1" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Giá khách mua gốc</label>
+            <input type="text" class="form-input" id="resale-original-price" placeholder="0" inputmode="numeric" oninput="this.value = parseVND(this.value) ? new Intl.NumberFormat('vi-VN').format(parseVND(this.value)) : ''">
+          </div>
+        </div>
+
+        <!-- Seat for resale -->
+        <div class="form-group">
+          <label class="form-label">Số ghế / vị trí</label>
+          <input type="text" class="form-input" id="resale-seat" placeholder="VD: A1, A2">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Giá rao pass (tổng)</label>
+            <input type="text" class="form-input" id="resale-asking" placeholder="0" inputmode="numeric" required oninput="this.value = parseVND(this.value) ? new Intl.NumberFormat('vi-VN').format(parseVND(this.value)) : ''; calcResaleRefund()">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Phí dịch vụ</label>
+            <input type="text" class="form-input" id="resale-fee" placeholder="0" inputmode="numeric" oninput="this.value = parseVND(this.value) ? new Intl.NumberFormat('vi-VN').format(parseVND(this.value)) : ''; calcResaleRefund()">
+          </div>
+        </div>
+
+        <div id="resale-refund-preview" class="form-hint" style="margin-bottom:var(--space-md);font-size:0.85rem"></div>
+
+        <div class="form-group">
+          <label class="form-label">Lý do ký gửi</label>
+          <select class="form-select" id="resale-reason">
+            <option value="không đi được">Không đi được</option>
+            <option value="đổi hạng vé">Muốn đổi hạng vé</option>
+            <option value="khác">Khác</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Ghi chú</label>
+          <textarea class="form-textarea" id="resale-note" placeholder="VD: khách muốn đổi từ CAT2 lên VIP, ưu tiên pass nhanh..."></textarea>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeResaleModal()">Hủy</button>
+          <button type="submit" class="btn btn-gold">💾 Nhận ký gửi</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: INVENTORY EDIT          -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="inventory-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">✏️ Chỉnh sửa tồn kho</h3>
+        <button class="modal-close" onclick="closeInventoryModal()">✕</button>
+      </div>
+      <div id="inventory-form-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeInventoryModal()">Hủy</button>
+        <button class="btn btn-gold" onclick="saveInventory()">💾 Lưu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- CONFIRM DIALOG                 -->
+  <!-- ============================== -->
+  <div class="confirm-overlay" id="confirm-dialog">
+    <div class="confirm-box">
+      <span class="confirm-icon" id="confirm-icon">⚠️</span>
+      <p class="confirm-message" id="confirm-message">Bạn có chắc chắn?</p>
+      <div class="confirm-actions">
+        <button class="btn btn-secondary" onclick="closeConfirm()">Hủy</button>
+        <button class="btn btn-gold" id="confirm-ok-btn" onclick="confirmOk()">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Hidden bill render target -->
+  <div id="bill-render-target" style="position:fixed;left:-9999px;top:0;"></div>
+
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+  <script src="sync.js"></script>
+</body>
+</html>

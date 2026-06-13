@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Tra cứu trạng thái đơn vé Concert BigBang 2026 — SVĐ Mỹ Đình">
+  <meta name="theme-color" content="#0a0a14">
+  <title>Tra cứu đơn vé — BIGBANG 2026</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    /* ===== CẤU HÌNH: thay 2 dòng dưới bằng thông tin Supabase của shop ===== */
+    /* (xem hướng dẫn trong SETUP_NANG_CAP.md) */
+  </style>
+  <script>
+    const SUPABASE_URL = 'https://satcrqkyxrrioctncokv.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhdGNycWt5eHJyaW9jdG5jb2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNzg5MDMsImV4cCI6MjA5Njc1NDkwM30.dpMVDMnX6wvmaUfAmu0NxYVqXE-sbSYnUi9Ufz4-Ce0';
+    const SHOP_NAME = 'BigBang Ticket VN';
+    const SHOP_ZALO = '';                                  // vd: 0901234567 — hiện nút liên hệ
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap');
+    :root {
+      --bg: #0a0a14; --bg-card: #1a1a2e; --bg-input: #16162b;
+      --gold: #f0c040; --gold-dark: #c49b1a;
+      --text: #f0f0f5; --text-2: #a0a0c0; --muted: #6a6a8a;
+      --border: rgba(255,255,255,0.1); --border-gold: rgba(240,192,64,0.3);
+      --green: #66bb6a; --orange: #ffa726; --blue: #64b5f6; --purple: #ab47bc; --red: #ef5350; --gray: #78909c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: linear-gradient(135deg, #0a0a14 0%, #1a1030 50%, #0a0a14 100%);
+      color: var(--text); min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .box { width: 100%; max-width: 440px; }
+    .header { text-align: center; margin-bottom: 28px; }
+    .crown { font-size: 2.6rem; display: inline-block; filter: drop-shadow(0 0 18px rgba(240,192,64,0.5)); animation: breathe 3.2s ease-in-out infinite; }
+    @keyframes breathe { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+    h1 { font-family: 'Outfit', sans-serif; font-size: 1.35rem; letter-spacing: 0.04em; margin-top: 8px; }
+    h1 span { color: var(--gold); }
+    .sub { color: var(--text-2); font-size: 0.82rem; margin-top: 6px; line-height: 1.5; }
+    .card {
+      background: linear-gradient(145deg, rgba(30,30,55,0.9), rgba(20,20,40,0.95));
+      border: 1px solid var(--border-gold); border-radius: 18px; padding: 24px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5), 0 0 60px rgba(240,192,64,0.06);
+    }
+    label { display: block; font-size: 0.78rem; color: var(--text-2); margin-bottom: 6px; font-weight: 600; }
+    input {
+      width: 100%; background: var(--bg-input); border: 1px solid var(--border);
+      border-radius: 10px; padding: 13px 14px; color: var(--text); font-size: 1rem;
+      margin-bottom: 16px; outline: none; transition: border-color .15s;
+      font-family: inherit;
+    }
+    input:focus { border-color: var(--gold); }
+    input::placeholder { color: var(--muted); }
+    button {
+      width: 100%; background: linear-gradient(135deg, #f0c040, #e6a817, #c49b1a);
+      color: #0a0a14; border: none; border-radius: 10px; padding: 14px;
+      font-size: 1rem; font-weight: 800; cursor: pointer; font-family: inherit;
+      box-shadow: 0 4px 20px rgba(240,192,64,0.25); transition: transform .12s;
+    }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .err { color: var(--red); font-size: 0.82rem; margin-top: 12px; text-align: center; min-height: 1.2em; }
+    .result { margin-top: 18px; display: none; }
+    .result.show { display: block; animation: up .3s ease; }
+    @keyframes up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .status-pill {
+      display: inline-block; padding: 5px 14px; border-radius: 999px;
+      font-size: 0.78rem; font-weight: 800; letter-spacing: 0.03em; margin-bottom: 14px;
+    }
+    .row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; }
+    .row:last-child { border-bottom: none; }
+    .row .k { color: var(--text-2); }
+    .row .v { font-weight: 600; text-align: right; }
+    .row .v.gold { color: var(--gold); font-weight: 800; }
+    .row .v.green { color: var(--green); }
+    .row .v.red { color: var(--red); }
+    .note { font-size: 0.72rem; color: var(--muted); text-align: center; margin-top: 16px; line-height: 1.6; }
+    .zalo-btn {
+      display: block; text-align: center; margin-top: 12px; padding: 11px;
+      border: 1px solid var(--border-gold); border-radius: 10px; color: var(--gold);
+      text-decoration: none; font-size: 0.85rem; font-weight: 700;
+    }
+    .footer { text-align: center; margin-top: 20px; font-size: 0.7rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="header">
+      <span class="crown">👑</span>
+      <h1>TRA CỨU ĐƠN VÉ <span>BIGBANG</span></h1>
+      <p class="sub">Concert BIGBANG 2026 — SVĐ Mỹ Đình, Hà Nội<br>Nhập mã đơn trên bill xác nhận để kiểm tra trạng thái</p>
+    </div>
+
+    <div class="card">
+      <label for="code">Mã đơn hàng</label>
+      <input id="code" placeholder="VD: BB-0012" autocomplete="off" autocapitalize="characters">
+      <label for="last4">4 số cuối SĐT đặt vé</label>
+      <input id="last4" placeholder="VD: 4567" inputmode="numeric" maxlength="4">
+      <button id="btn" onclick="lookup()">🔍 Tra cứu</button>
+      <div class="err" id="err"></div>
+
+      <div class="result" id="result">
+        <div style="text-align:center"><span class="status-pill" id="r-status"></span></div>
+        <div class="row"><span class="k">Mã đơn</span><span class="v gold" id="r-code"></span></div>
+        <div class="row"><span class="k">Khách hàng</span><span class="v" id="r-name"></span></div>
+        <div class="row"><span class="k">Ngày diễn</span><span class="v" id="r-day"></span></div>
+        <div class="row"><span class="k">Hạng vé</span><span class="v" id="r-tier"></span></div>
+        <div class="row"><span class="k">Số lượng</span><span class="v" id="r-qty"></span></div>
+        <div class="row" id="row-seat" style="display:none"><span class="k">Số ghế</span><span class="v gold" id="r-seat"></span></div>
+        <div class="row"><span class="k">Tổng tiền</span><span class="v" id="r-total"></span></div>
+        <div class="row"><span class="k">Đã thanh toán</span><span class="v green" id="r-paid"></span></div>
+        <div class="row" id="row-remain"><span class="k">Còn lại</span><span class="v red" id="r-remain"></span></div>
+        <div class="row"><span class="k">Hình thức giao</span><span class="v" id="r-delivery"></span></div>
+        <a class="zalo-btn" id="zalo-link" style="display:none" target="_blank" rel="noopener">💬 Liên hệ shop qua Zalo</a>
+      </div>
+
+      <p class="note">🔒 Trang này chỉ hiển thị đơn của bạn khi nhập đúng cả mã đơn và SĐT.<br>Thông tin cá nhân được che bớt để bảo mật.</p>
+    </div>
+    <p class="footer" id="shop-footer"></p>
+  </div>
+
+  <script>
+    const client = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    document.getElementById('shop-footer').textContent = SHOP_NAME + ' — hệ thống xác nhận đơn minh bạch';
+    if (SHOP_ZALO) {
+      const z = document.getElementById('zalo-link');
+      z.href = 'https://zalo.me/' + SHOP_ZALO;
+      z.style.display = 'block';
+    }
+
+    const STATUS_STYLE = {
+      'mới': ['rgba(100,181,246,0.15)', '#64b5f6', 'MỚI — CHỜ CỌC'],
+      'đã cọc': ['rgba(255,167,38,0.15)', '#ffa726', 'ĐÃ CỌC'],
+      'đã thanh toán đủ': ['rgba(102,187,106,0.15)', '#66bb6a', 'ĐÃ THANH TOÁN ĐỦ'],
+      'đã giao vé': ['rgba(171,71,188,0.15)', '#ab47bc', 'ĐÃ GIAO VÉ ✓'],
+      'hoàn cọc': ['rgba(239,83,80,0.15)', '#ef5350', 'ĐÃ HOÀN CỌC'],
+      'hủy': ['rgba(120,144,156,0.15)', '#78909c', 'ĐÃ HỦY'],
+    };
+    const fmt = n => new Intl.NumberFormat('vi-VN').format(n || 0) + 'đ';
+    const dayLabel = d => d === 'day1' ? 'Day 1 (24/10/2026)' : d === 'day2' ? 'Day 2 (25/10/2026)' : d === 'both' ? 'Cả 2 ngày (24–25/10)' : d;
+
+    async function lookup() {
+      const code = document.getElementById('code').value.trim();
+      const last4 = document.getElementById('last4').value.trim();
+      const err = document.getElementById('err');
+      const btn = document.getElementById('btn');
+      const result = document.getElementById('result');
+      err.textContent = '';
+      result.classList.remove('show');
+
+      if (!code || last4.length !== 4) {
+        err.textContent = 'Vui lòng nhập mã đơn và đủ 4 số cuối SĐT';
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'Đang tra cứu...';
+      try {
+        const { data, error } = await client.rpc('lookup_order', { p_code: code, p_phone_last4: last4 });
+        if (error) throw error;
+        if (!data || data.length === 0) {
+          err.textContent = 'Không tìm thấy đơn — kiểm tra lại mã đơn và SĐT, hoặc liên hệ shop.';
+          return;
+        }
+        const o = data[0];
+        const st = STATUS_STYLE[o.status] || ['rgba(255,255,255,0.1)', '#fff', (o.status || '').toUpperCase()];
+        const pill = document.getElementById('r-status');
+        pill.style.background = st[0]; pill.style.color = st[1]; pill.style.border = '1px solid ' + st[1] + '55';
+        pill.textContent = st[2];
+
+        document.getElementById('r-code').textContent = o.order_code;
+        document.getElementById('r-name').textContent = o.customer_masked || '—';
+        document.getElementById('r-day').textContent = dayLabel(o.show_day);
+        document.getElementById('r-tier').textContent = o.ticket_tier;
+        document.getElementById('r-qty').textContent = o.quantity;
+        if (o.seat_number) {
+          document.getElementById('r-seat').textContent = o.seat_number;
+          document.getElementById('row-seat').style.display = 'flex';
+        } else {
+          document.getElementById('row-seat').style.display = 'none';
+        }
+        document.getElementById('r-total').textContent = fmt(o.total);
+
+        const paid = (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') ? o.total : (o.deposit_amount || 0);
+        document.getElementById('r-paid').textContent = fmt(paid);
+        const remain = (o.total || 0) - paid;
+        document.getElementById('row-remain').style.display = remain > 0 ? 'flex' : 'none';
+        document.getElementById('r-remain').textContent = fmt(remain);
+        document.getElementById('r-delivery').textContent = o.delivery_method || '—';
+        result.classList.add('show');
+      } catch (e) {
+        err.textContent = 'Lỗi kết nối — thử lại sau ít phút nhé.';
+        console.error(e);
+      } finally {
+        btn.disabled = false; btn.textContent = '🔍 Tra cứu';
+      }
+    }
+    document.getElementById('last4').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
+    document.getElementById('code').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('last4').focus(); });
+  </script>
+</body>
+</html>

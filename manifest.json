@@ -1,0 +1,14 @@
+{
+  "name": "BigBang CRM — Quản lý vé concert",
+  "short_name": "BigBang CRM",
+  "description": "Mini-CRM quản lý bán vé Concert BigBang 2026 — SVĐ Mỹ Đình",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a14",
+  "theme_color": "#0a0a14",
+  "lang": "vi",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
