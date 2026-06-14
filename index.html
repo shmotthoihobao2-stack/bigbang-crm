@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=dev">
   <script>
     // ÉP BUỘC XÓA CACHE VÀ SERVICE WORKER ĐỂ UPDATE TRỰC TIẾP
     if ('serviceWorker' in navigator) {
@@ -428,9 +428,11 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-gold" onclick="setupSupabase()">🔗 Kết nối & đồng bộ</button>
             <button class="btn btn-secondary" onclick="manualSync()">🔄 Đồng bộ ngay</button>
+            <button class="btn btn-secondary" onclick="forceSyncAll()">☁️⬆️ Đồng bộ lại toàn bộ</button>
             <button class="btn btn-danger" onclick="disconnectSupabase()">Ngắt kết nối</button>
           </div>
           <p class="form-hint mt-sm" id="sync-status-text">Chế độ local (chưa bật đồng bộ cloud)</p>
+          <p class="form-hint" style="font-size:0.72rem;color:var(--text-muted)">💡 "Đồng bộ lại toàn bộ" đẩy MỌI dữ liệu máy này lên cloud — dùng khi nghi có đơn chưa lên.</p>
         </div>
 
         <!-- Export -->
@@ -824,7 +826,7 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
           integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
           crossorigin="anonymous"></script>
-  <script src="app.js"></script>
-  <script src="sync.js"></script>
+  <script src="app.js?v=dev"></script>
+  <script src="sync.js?v=dev"></script>
 </body>
 </html>

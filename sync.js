@@ -24,6 +24,16 @@ db.version(4).stores({
   resales: '++id, uuid, order_id, customer_name, status, created_at',
   outbox: '++id, table_name, created_at'
 });
+// ===== DB v5: bảng history (snapshot bản cũ trước khi bị ghi đè -> khôi phục được, chống mất dữ liệu) =====
+db.version(5).stores({
+  customers: '++id, uuid, name, phone, email, zalo, social, source, note, created_at',
+  orders: '++id, uuid, order_code, customer_id, show_day, ticket_tier, quantity, unit_price, total, deposit_amount, status, payment_proof, delivery_method, ctv, note, created_at, updated_at',
+  inventory: '++id, uuid, show_day, ticket_tier, total_stock, cost_price',
+  settings: 'key',
+  resales: '++id, uuid, order_id, customer_name, status, created_at',
+  outbox: '++id, table_name, created_at',
+  history: '++id, table_name, uuid, replaced_at'
+});
 
 // ===== SUPABASE DEFAULTS (hardcode để không mất kết nối khi xóa cache) =====
 const DEFAULT_SUPABASE_URL = 'https://satcrqkyxrrioctncokv.supabase.co';
@@ -108,7 +118,7 @@ async function toCloud(tableName, rec) {
       uuid: rec.uuid, name: rec.name || '', phone: rec.phone || '', email: rec.email || '', zalo: rec.zalo || '',
       social: rec.social || '', source: rec.source || '', note: rec.note || '',
       created_at: rec.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(), deleted: false
+      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'orders') {
@@ -130,14 +140,14 @@ async function toCloud(tableName, rec) {
       combo_info: rec.combo_info || '',
       payment_proof: rec.payment_proof || '',
       note: rec.note || '', created_at: rec.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(), deleted: !!rec.deleted_at
+      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'inventory') {
     return {
       uuid: rec.uuid, show_day: rec.show_day, ticket_tier: rec.ticket_tier,
       total_stock: rec.total_stock || 0, cost_price: rec.cost_price || 0,
-      updated_at: new Date().toISOString(), deleted: false
+      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'resales') {
@@ -153,7 +163,7 @@ async function toCloud(tableName, rec) {
       original_price: rec.original_price || 0, asking_price: rec.asking_price || 0,
       service_fee: rec.service_fee || 0, seat_number: rec.seat_number || '', reason: rec.reason || '', note: rec.note || '',
       status: rec.status, created_at: rec.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(), deleted: false
+      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
     };
   }
   return rec;
@@ -162,7 +172,8 @@ async function toCloud(tableName, rec) {
 // ===== ĐẨY OUTBOX LÊN CLOUD =====
 async function processOutbox() {
   if (!sbReady || !navigator.onLine) { updateSyncStatus(); return; }
-  const items = await db.outbox.orderBy('id').limit(50).toArray();
+  // Bỏ qua item "parked" (đã lỗi quá nhiều) ở vòng tự động — chỉ thử lại khi reconcile/bấm tay.
+  const items = await db.outbox.orderBy('id').filter(i => !i.parked).limit(50).toArray();
   if (items.length === 0) { updateSyncStatus(); return; }
 
   let progressed = 0; // số item đã rời hàng đợi (thành công hoặc bị loại) — để chặn đệ quy vô hạn
@@ -189,22 +200,107 @@ async function processOutbox() {
       const msg = (e && e.message) ? e.message : String(e);
       console.error('push fail', item.table_name, msg, `(lần ${retries}/${MAX_OUTBOX_RETRIES})`);
       if (retries >= MAX_OUTBOX_RETRIES) {
-        console.error('Outbox item bỏ qua sau nhiều lần lỗi:', item, msg);
-        await db.outbox.delete(item.id);
-        progressed++;
-        if (typeof showToast === 'function') showToast('Bỏ qua 1 bản ghi lỗi đồng bộ: ' + msg, 'warning');
+        // KHÔNG xóa (chống mất dữ liệu) — "park" lại để khỏi thử liên tục; reconcile/bấm tay sẽ thử lại.
+        console.error('Outbox item parked sau nhiều lần lỗi:', item, msg);
+        await db.outbox.update(item.id, { retries, last_error: msg, parked: 1 });
+        if (typeof showToast === 'function') showToast('1 bản ghi chưa đồng bộ được — bấm "Đồng bộ lại toàn bộ" để thử tiếp', 'warning');
       } else {
         await db.outbox.update(item.id, { retries, last_error: msg });
-        hadError = true;
       }
+      hadError = true;
       // KHÔNG return: item lỗi không được chặn các item phía sau (chống head-of-line blocking)
     }
   }
   updateSyncStatus(hadError ? 'error' : undefined);
-  // Còn nữa & vừa có tiến triển & batch đầy => xử lý tiếp. Nếu cả batch đều kẹt (progressed=0) thì dừng,
-  // chờ interval 30s sau thử lại (tránh đệ quy vô hạn với item lỗi).
-  const remaining = await db.outbox.count();
+  // Còn item chưa parked & vừa có tiến triển & batch đầy => xử lý tiếp. Nếu cả batch đều kẹt thì dừng,
+  // chờ interval/reconcile thử lại (tránh đệ quy vô hạn với item lỗi).
+  const remaining = await db.outbox.filter(i => !i.parked).count();
   if (remaining > 0 && progressed > 0 && items.length === 50) processOutbox();
+}
+
+// ===== RECONCILE: lưới an toàn — đảm bảo MỌI record local đều lên cloud =====
+// So local vs cloud theo uuid+updated_at; đẩy lên cloud những gì local thiếu/mới hơn.
+// Chống mọi kiểu "kẹt": hook lỡ enqueue (pulling race), outbox bị mất, record tạo trước khi bật sync.
+// Chống TRÙNG order_code (2 máy offline cùng sinh BB-0004): giữ đơn tạo sớm nhất, đổi mã đơn tạo sau.
+async function dedupeOrderCodes() {
+  const all = (await db.orders.toArray()).filter(o => !o.deleted_at && o.order_code);
+  const byCode = {};
+  for (const o of all) { (byCode[o.order_code] = byCode[o.order_code] || []).push(o); }
+  let maxNum = all.reduce((m, o) => Math.max(m, parseInt((o.order_code || '').replace('BB-', '')) || 0), 0);
+  let changed = false;
+  for (const code in byCode) {
+    const group = byCode[code];
+    if (group.length < 2) continue;
+    group.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)); // giữ đơn tạo SỚM nhất
+    for (let i = 1; i < group.length; i++) {
+      maxNum++;
+      const newCode = 'BB-' + String(maxNum).padStart(4, '0');
+      await db.orders.update(group[i].id, { order_code: newCode, updated_at: new Date().toISOString() });
+      changed = true;
+      if (typeof showToast === 'function') showToast(`Mã đơn trùng ${code} → đổi 1 đơn thành ${newCode}`, 'warning');
+    }
+  }
+  if (changed) {
+    const cur = await db.settings.get('orderCounter');
+    if (!cur || (parseInt(cur.value) || 0) < maxNum) await db.settings.put({ key: 'orderCounter', value: String(maxNum) });
+  }
+}
+
+let reconciling = false;
+async function reconcile(forceAll = false) {
+  if (!sbReady || !navigator.onLine || reconciling) return;
+  reconciling = true;
+  try {
+    // Mở lại các item đã "park" để thử lại (đặc biệt khi user bấm Đồng bộ lại toàn bộ)
+    await db.outbox.toCollection().modify(i => { if (i.parked) { i.parked = 0; i.retries = 0; } });
+    await dedupeOrderCodes(); // xử lý trùng mã trước khi đẩy lên
+
+    for (const t of SYNC_TABLES) {
+      let cloudRows = [];
+      try {
+        const { data, error } = await sb.from(t).select('uuid,updated_at,deleted');
+        if (error) throw error;
+        cloudRows = data || [];
+      } catch (e) { console.warn('reconcile fetch', t, e.message); continue; }
+      const cloudMap = new Map(cloudRows.map(r => [r.uuid, r]));
+      const locals = await db[t].toArray();
+      for (const loc of locals) {
+        if (!loc.uuid) {                       // backfill uuid cho record cũ
+          loc.uuid = genUUID();
+          pulling = true;
+          await db[t].update(loc.id, { uuid: loc.uuid });
+          pulling = false;
+        }
+        const cloud = cloudMap.get(loc.uuid);
+        const locDeleted = !!loc.deleted_at;
+        const cloudDeleted = cloud ? !!cloud.deleted : false;
+        const localTime = new Date(loc.updated_at || 0).getTime();
+        const cloudTime = cloud ? new Date(cloud.updated_at || 0).getTime() : -1;
+        if (locDeleted) {
+          if (!cloud || !cloudDeleted) await enqueue(t, 'delete', { uuid: loc.uuid });
+        } else if (forceAll || !cloud || localTime > cloudTime) {
+          await enqueue(t, 'upsert', loc);     // local thiếu trên cloud hoặc mới hơn -> đẩy lên
+        }
+      }
+    }
+    await processOutbox();
+  } catch (e) {
+    console.error('reconcile', e);
+  } finally {
+    reconciling = false;
+  }
+}
+window.reconcileSync = reconcile; // cho nút "Đồng bộ lại toàn bộ" trong app.js gọi
+
+// Lưu snapshot bản local CŨ trước khi bị bản cloud mới hơn ghi đè -> có thể khôi phục (chống mất dữ liệu)
+async function snapshotHistory(table, oldRec, source) {
+  try {
+    if (!oldRec || !db.history) return;
+    await db.history.add({
+      table_name: table, uuid: oldRec.uuid || '', order_code: oldRec.order_code || oldRec.name || '',
+      snapshot: JSON.stringify(oldRec), replaced_at: new Date().toISOString(), source: source || 'pull'
+    });
+  } catch (e) { /* history là phụ trợ, không bao giờ chặn sync */ }
 }
 
 // ===== KÉO DỮ LIỆU CLOUD VỀ & MERGE =====
@@ -212,13 +308,17 @@ async function pullAll(showResult) {
   if (!sbReady) return;
   pulling = true;
   try {
+    const nowIso = new Date().toISOString();
     // 1. Customers trước (orders cần map customer_uuid -> id local)
     const { data: cloudCustomers, error: e1 } = await sb.from('customers').select('*');
     if (e1) throw e1;
     const uuidToLocalId = {};
     for (const cc of (cloudCustomers || [])) {
       const local = await db.customers.where('uuid').equals(cc.uuid).first();
-      if (cc.deleted) { if (local) await db.customers.delete(local.id); continue; }
+      if (cc.deleted) {  // SOFT-delete local (vào Thùng rác, khôi phục được) thay vì xóa cứng
+        if (local) { uuidToLocalId[cc.uuid] = local.id; if (!local.deleted_at) await db.customers.update(local.id, { deleted_at: cc.updated_at || nowIso, updated_at: cc.updated_at || nowIso }); }
+        continue;
+      }
       if (!local) {
         const id = await db.customers.add({
           uuid: cc.uuid, name: cc.name, phone: cc.phone, email: cc.email || '', zalo: cc.zalo, social: cc.social,
@@ -227,6 +327,7 @@ async function pullAll(showResult) {
         uuidToLocalId[cc.uuid] = id;
       } else {
         if (new Date(cc.updated_at) > new Date(local.updated_at || 0)) {
+          await snapshotHistory('customers', local, 'pull');
           await db.customers.update(local.id, { name: cc.name, phone: cc.phone, email: cc.email || '', zalo: cc.zalo, social: cc.social, source: cc.source, note: cc.note, updated_at: cc.updated_at });
         }
         uuidToLocalId[cc.uuid] = local.id;
@@ -236,9 +337,13 @@ async function pullAll(showResult) {
     // 2. Orders
     const { data: cloudOrders, error: e2 } = await sb.from('orders').select('*');
     if (e2) throw e2;
+    const orderUuidToLocalId = {};
     for (const co of (cloudOrders || [])) {
       const local = await db.orders.where('uuid').equals(co.uuid).first();
-      if (co.deleted) { if (local) await db.orders.delete(local.id); continue; }
+      if (co.deleted) {
+        if (local) { orderUuidToLocalId[co.uuid] = local.id; if (!local.deleted_at) await db.orders.update(local.id, { deleted_at: co.updated_at || nowIso, updated_at: co.updated_at || nowIso }); }
+        continue;
+      }
       const fields = {
         order_code: co.order_code, customer_id: uuidToLocalId[co.customer_uuid] || (local ? local.customer_id : null),
         show_day: co.show_day, ticket_tier: co.ticket_tier, quantity: co.quantity,
@@ -246,34 +351,39 @@ async function pullAll(showResult) {
         status: co.status, delivery_method: co.delivery_method, ctv: co.ctv, seat_number: co.seat_number || '', ticket_source: co.ticket_source || '', combo_info: co.combo_info || '', payment_proof: co.payment_proof || '', note: co.note,
         created_at: co.created_at, updated_at: co.updated_at
       };
-      if (!local) await db.orders.add({ uuid: co.uuid, payment_proof: '', ...fields });
-      else if (new Date(co.updated_at) > new Date(local.updated_at || 0)) await db.orders.update(local.id, fields);
+      if (!local) { const id = await db.orders.add({ uuid: co.uuid, ...fields }); orderUuidToLocalId[co.uuid] = id; }
+      else {
+        orderUuidToLocalId[co.uuid] = local.id;
+        if (new Date(co.updated_at) > new Date(local.updated_at || 0)) { await snapshotHistory('orders', local, 'pull'); await db.orders.update(local.id, fields); }
+      }
     }
 
-    // 3. Inventory
+    // 3. Inventory (so timestamp như orders/customers để không đè mất chỉnh sửa tồn kho local)
     const { data: cloudInv, error: e3 } = await sb.from('inventory').select('*');
     if (e3) throw e3;
     for (const ci of (cloudInv || [])) {
       const local = await db.inventory.where('uuid').equals(ci.uuid).first();
-      if (ci.deleted) { if (local) await db.inventory.delete(local.id); continue; }
-      if (!local) await db.inventory.add({ uuid: ci.uuid, show_day: ci.show_day, ticket_tier: ci.ticket_tier, total_stock: ci.total_stock, cost_price: ci.cost_price });
-      else await db.inventory.update(local.id, { total_stock: ci.total_stock, cost_price: ci.cost_price });
+      if (ci.deleted) { if (local && !local.deleted_at) await db.inventory.update(local.id, { deleted_at: ci.updated_at || nowIso, updated_at: ci.updated_at || nowIso }); continue; }
+      const invFields = { show_day: ci.show_day, ticket_tier: ci.ticket_tier, total_stock: ci.total_stock, cost_price: ci.cost_price, updated_at: ci.updated_at };
+      if (!local) await db.inventory.add({ uuid: ci.uuid, ...invFields });
+      else if (new Date(ci.updated_at || 0) > new Date(local.updated_at || 0)) await db.inventory.update(local.id, invFields);
     }
 
-    // 4. Resales
+    // 4. Resales (remap order_uuid -> order_id local; soft-delete; history)
     const { data: cloudRes, error: e4 } = await sb.from('resales').select('*');
     if (e4) throw e4;
     for (const cr of (cloudRes || [])) {
       const local = await db.resales.where('uuid').equals(cr.uuid).first();
-      if (cr.deleted) { if (local) await db.resales.delete(local.id); continue; }
+      if (cr.deleted) { if (local && !local.deleted_at) await db.resales.update(local.id, { deleted_at: cr.updated_at || nowIso, updated_at: cr.updated_at || nowIso }); continue; }
       const fields = {
+        order_id: orderUuidToLocalId[cr.order_uuid] || (local ? local.order_id : null),
         order_code: cr.order_code, customer_name: cr.customer_name, customer_phone: cr.customer_phone,
         show_day: cr.show_day, ticket_tier: cr.ticket_tier, quantity: cr.quantity,
         original_price: cr.original_price, asking_price: cr.asking_price, service_fee: cr.service_fee,
         reason: cr.reason, seat_number: cr.seat_number || '', note: cr.note, status: cr.status, created_at: cr.created_at, updated_at: cr.updated_at
       };
-      if (!local) await db.resales.add({ uuid: cr.uuid, order_id: null, ...fields });
-      else if (new Date(cr.updated_at) > new Date(local.updated_at || 0)) await db.resales.update(local.id, fields);
+      if (!local) await db.resales.add({ uuid: cr.uuid, ...fields });
+      else if (new Date(cr.updated_at) > new Date(local.updated_at || 0)) { await snapshotHistory('resales', local, 'pull'); await db.resales.update(local.id, fields); }
     }
 
     // 5. Settings dùng chung (hạng vé, tên shop, orderCounter...)
@@ -465,6 +575,20 @@ async function manualSync() {
   await pullAll(true);
 }
 
+// Đẩy LẠI toàn bộ dữ liệu máy này lên cloud (khôi phục đơn kẹt như BB-0004). force=true => enqueue mọi record.
+async function forceSyncAll() {
+  if (!sbReady) {
+    const ok = await connectSupabase(false);
+    if (!ok) { showToast('Chưa cấu hình Supabase — xem mục Đồng bộ cloud trong Cài đặt', 'warning'); return; }
+  }
+  showToast('Đang đẩy lại toàn bộ dữ liệu lên cloud...', 'info');
+  await pullAll(false);       // kéo cloud về trước để biết cái gì đã có
+  await reconcile(true);      // force: enqueue mọi record local còn thiếu/khác
+  const left = await db.outbox.count();
+  showToast(left > 0 ? `Còn ${left} thay đổi đang đẩy lên...` : 'Đã đồng bộ toàn bộ lên cloud! ✅', left > 0 ? 'info' : 'success');
+}
+window.forceSyncAll = forceSyncAll;
+
 async function disconnectSupabase() {
   showConfirm('Ngắt kết nối cloud? Dữ liệu trên cloud vẫn còn, app quay về chế độ local.', async () => {
     for (const k of ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword']) {
@@ -482,8 +606,10 @@ async function updateSyncStatus(forced) {
   const label = document.getElementById('sync-status-text');
   if (!dot) return;
   const pending = await db.outbox.count();
+  const parked = await db.outbox.filter(i => i.parked).count();
   let state, text;
-  if (forced === 'error') { state = 'error'; text = 'Lỗi đồng bộ — sẽ tự thử lại'; }
+  if (parked > 0) { state = 'error'; text = `${parked} bản ghi chưa đồng bộ được — bấm "Đồng bộ lại toàn bộ" trong Cài đặt`; }
+  else if (forced === 'error') { state = 'error'; text = 'Lỗi đồng bộ — sẽ tự thử lại'; }
   else if (!sbReady) {
     const hasCfg = (await db.settings.get('supabaseUrl'))?.value;
     state = hasCfg ? 'offline' : 'local';
@@ -514,9 +640,13 @@ window.uploadPaymentProofToSupabase = async function(file, orderCode) {
   return publicUrl;
 };
 
-window.addEventListener('online', () => { updateSyncStatus(); processOutbox(); pullAll(false); });
+window.addEventListener('online', () => { updateSyncStatus(); reconcile(); pullAll(false); });
 window.addEventListener('offline', updateSyncStatus);
+// Khi quay lại app (mở tab/khoá màn hình điện thoại) -> reconcile để đẩy nốt thứ còn kẹt
+document.addEventListener('visibilitychange', () => { if (!document.hidden && sbReady) { reconcile(); pullAll(false); } });
 setInterval(() => { if (sbReady) { processOutbox(); pullAll(false); } }, 30000);
+// Reconcile định kỳ (3 phút): lưới an toàn đảm bảo không record nào kẹt lại local
+setInterval(() => { if (sbReady) reconcile(); }, 180000);
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Điền form cài đặt nếu đã lưu
@@ -531,24 +661,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     const ok = await connectSupabase(true);
     if (ok) {
-      // Auto-backfill UUID cho record cũ thiếu uuid
-      let needsUpload = false;
-      for (const tbl of SYNC_TABLES) {
-        const rows = await db[tbl].toArray();
-        for (const r of rows) {
-          if (!r.uuid) {
-            pulling = true;
-            await db[tbl].update(r.id, { uuid: genUUID() });
-            pulling = false;
-            needsUpload = true;
-          }
-        }
-      }
-      if (needsUpload) {
-        await firstSyncUpload();
-      }
-      await processOutbox();
+      // Kéo cloud về trước, rồi reconcile để đẩy MỌI record local còn thiếu/mới hơn lên cloud.
+      // reconcile() tự backfill uuid + đảm bảo không record nào kẹt lại (thay cho backfill thủ công cũ).
       await pullAll(false);
+      await reconcile();
     }
   }, 300);
 

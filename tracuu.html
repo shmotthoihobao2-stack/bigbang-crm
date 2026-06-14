@@ -16,6 +16,21 @@
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhdGNycWt5eHJyaW9jdG5jb2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNzg5MDMsImV4cCI6MjA5Njc1NDkwM30.dpMVDMnX6wvmaUfAmu0NxYVqXE-sbSYnUi9Ufz4-Ce0';
     const SHOP_NAME = 'BigBang Ticket VN';
     const SHOP_ZALO = '';                                  // vd: 0901234567 — hiện nút liên hệ
+    // GUARD: nếu là bản CLONE (khác domain gốc) mà QUÊN đổi URL Supabase -> cảnh báo (không chặn trang gốc).
+    (function () {
+      var OWNER_HOST = 'shmotthoihobao2-stack.github.io';
+      var usingDevDb = SUPABASE_URL.indexOf('satcrqkyxrrioctncokv') !== -1;
+      var onOwner = location.hostname.indexOf(OWNER_HOST) !== -1 || location.protocol === 'file:';
+      if (usingDevDb && !onOwner) {
+        console.warn('[CẢNH BÁO] tracuu.html đang trỏ về Supabase MẪU. Hãy sửa SUPABASE_URL + SUPABASE_ANON_KEY (dòng 15-16) sang DB của shop bạn — xem HD_NHAN_BAN_CRM.md.');
+        document.addEventListener('DOMContentLoaded', function () {
+          var b = document.createElement('div');
+          b.style.cssText = 'background:#ef5350;color:#fff;padding:10px;text-align:center;font-size:13px;font-family:sans-serif';
+          b.textContent = '⚠️ Trang tra cứu chưa cấu hình Supabase của shop (đang dùng DB mẫu). Chủ shop: sửa dòng 15-16 trong tracuu.html.';
+          document.body.insertBefore(b, document.body.firstChild);
+        });
+      }
+    })();
   </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap');

@@ -164,6 +164,41 @@ grant execute on function public.lookup_order(text, text) to authenticated;
 alter table if exists orders add column if not exists payment_proof text default '';
 alter table if exists customers add column if not exists email text default '';
 
+-- ===== REALTIME: bật đồng bộ tức thời giữa điện thoại & máy tính (idempotent) =====
+-- Thiếu bước này thì 2 máy KHÔNG tự cập nhật cho nhau khi có đơn mới.
+do $$
+declare t text;
+begin
+  foreach t in array array['orders','customers','inventory','resales'] loop
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+    ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end $$;
+
+-- ===== STORAGE: bucket ảnh ủy nhiệm chi (idempotent) =====
+-- Thiếu bucket này thì tính năng upload ảnh bill sẽ lỗi.
+insert into storage.buckets (id, name, public)
+values ('payment_proofs', 'payment_proofs', true)
+on conflict (id) do nothing;
+
+-- Quyền cho bucket: chủ shop (đăng nhập) toàn quyền; người lạ chỉ xem (bucket public để hiện ảnh trên bill).
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='pp_authenticated_all') then
+    create policy "pp_authenticated_all" on storage.objects
+      for all to authenticated
+      using (bucket_id = 'payment_proofs') with check (bucket_id = 'payment_proofs');
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='pp_public_read') then
+    create policy "pp_public_read" on storage.objects
+      for select to anon using (bucket_id = 'payment_proofs');
+  end if;
+end $$;
+
 -- ===== XONG! =====
 -- Bước tiếp theo: vào Authentication > Users > Add user
 -- tạo email + mật khẩu cho chủ shop, rồi nhập vào phần Cài đặt của app.

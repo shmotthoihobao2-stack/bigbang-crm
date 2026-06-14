@@ -26,7 +26,7 @@ Khi khách hàng nhận file `crm-source.zip`, hãy yêu cầu họ làm đúng 
 3. Đợi 2-3 phút cho Supabase setup xong.
 4. Trỏ vào **SQL Editor** (menu bên trái) -> Bấm **New Query**.
 5. Mở file **`supabase-setup.sql`** trong thư mục code, copy TOÀN BỘ nội dung dán vào SQL Editor -> Bấm nút **Run** màu xanh.
-   *(Việc này sẽ tự động tạo đủ 5 bảng: customers, orders, inventory, resales, app_settings và toàn bộ bảo mật RLS, các cột số ghế, nguồn vé).*
+   *(Một lần chạy này tự động tạo: đủ 5 bảng (customers, orders, inventory, resales, app_settings) + bảo mật RLS + các cột số ghế/nguồn vé/ảnh bill/email + **bật Realtime** (để điện thoại & máy tính tự cập nhật cho nhau) + **tạo kho ảnh `payment_proofs`** (để upload ảnh ủy nhiệm chi). KHÔNG cần thao tác tay thêm cho 2 phần này. Chạy lại nhiều lần cũng an toàn.)*
 6. Vào mục **Authentication** -> **Users** -> Bấm **Add user** -> Create new user.
    Tạo 1 tài khoản (Email + Mật khẩu) để cấp quyền cho Chủ shop mới (tài khoản này dùng để đăng nhập kết nối API).
 
@@ -70,7 +70,7 @@ Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Dat
 
 Để hệ thống mang tên của khách hàng (VD: Vé Rẻ VIP thay vì BigBang CRM):
 1. **Đổi chữ:** Mở file `index.html` và `manifest.json`, tìm tất cả chữ `BigBang CRM` đổi thành tên của họ.
-2. **Đổi Logo:** Thay 2 hình ảnh `icon-192.png` và `icon-512.png` trong thư mục bằng logo của họ (bắt buộc giữ nguyên tên file là `icon-...png` và định dạng hình vuông).
+2. **Đổi Logo:** Thay 2 hình ảnh `icon-192.png` và `icon-512.png` trong thư mục bằng logo của họ (bắt buộc giữ nguyên tên file là `icon-...png`, hình vuông, **đúng kích thước 192×192 px và 512×512 px** — sai size một số điện thoại Android sẽ không cài được app).
 3. Sau khi đổi, kéo thả lại thư mục lên **Netlify** để cập nhật. Nhớ đổi số `CACHE` trong file `sw.js` (ví dụ `v7` -> `v8`) để thiết bị tự xóa cache tải logo mới.
 
 ---

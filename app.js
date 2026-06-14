@@ -761,7 +761,7 @@ async function saveOrder(e) {
     await db.customers.update(customerId, { name, zalo, email, social, source, updated_at: new Date().toISOString() });
   } else {
     customerId = await db.customers.add({
-      name, phone, zalo, email, social, source, note: '', created_at: new Date().toISOString()
+      uuid: genUUID(), name, phone, zalo, email, social, source, note: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString()
     });
   }
 
@@ -791,6 +791,7 @@ async function saveOrder(e) {
     // Create new order
     const orderCode = await generateOrderCode();
     await db.orders.add({
+      uuid: genUUID(),
       order_code: orderCode,
       customer_id: customerId,
       show_day: showDay,
@@ -930,6 +931,7 @@ async function openDetailModal(orderId) {
     <button class="btn btn-secondary" onclick="closeDetailModal();openOrderModal(${orderId})">✏️ Sửa</button>
     <button class="btn btn-gold" onclick="generateBill(${orderId})">📃 Bill</button>
     ${emailBtn}
+    <button class="btn btn-secondary" onclick="showOrderHistory('${order.uuid || ''}', ${orderId})">🕘 Lịch sử</button>
     ${deleteBtn}
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;width:100%">
       <span style="font-size:0.7rem;color:var(--text-muted);width:100%;margin-bottom:4px">Đổi trạng thái:</span>
@@ -942,6 +944,50 @@ async function openDetailModal(orderId) {
 
 function closeDetailModal() {
   document.getElementById('detail-modal').classList.remove('active');
+}
+
+// Xem lịch sử các bản đã bị ghi đè (do đồng bộ) của 1 đơn -> có thể khôi phục (chống mất dữ liệu)
+async function showOrderHistory(uuid, orderId) {
+  const body = document.getElementById('detail-modal-body');
+  if (!uuid || !db.history) { showToast('Đơn này chưa có lịch sử thay đổi.', 'info'); return; }
+  const rows = (await db.history.where('uuid').equals(uuid).toArray())
+    .filter(h => h.table_name === 'orders')
+    .sort((a, b) => new Date(b.replaced_at) - new Date(a.replaced_at));
+  if (rows.length === 0) { showToast('Đơn này chưa có bản cũ nào (chưa từng bị ghi đè khi đồng bộ).', 'info'); return; }
+  const list = rows.slice(0, 20).map(h => {
+    let snap = {}; try { snap = JSON.parse(h.snapshot); } catch (e) {}
+    return `<div style="border:1px solid var(--border-light);border-radius:8px;padding:8px;margin-bottom:6px;font-size:0.78rem">
+      <div style="color:var(--text-muted);font-size:0.7rem">Bản lúc: ${formatDate(snap.updated_at || h.replaced_at)} · lưu khi ${h.source === 'pull' ? 'đồng bộ về' : h.source}</div>
+      <div>Trạng thái: <b>${esc(snap.status || '')}</b> · SL ${snap.quantity || ''} · ${esc(snap.ticket_tier || '')} · Cọc ${formatVND(snap.deposit_amount || 0)}</div>
+      ${snap.note ? '<div>Ghi chú: ' + esc(snap.note) + '</div>' : ''}
+      <button class="btn btn-sm btn-secondary" style="font-size:0.7rem;margin-top:4px" onclick="restoreFromHistory(${h.id}, ${orderId})">↩️ Khôi phục bản này</button>
+    </div>`;
+  }).join('');
+  body.insertAdjacentHTML('afterbegin',
+    `<div id="order-history-panel" class="card" style="margin-bottom:var(--space-md);border:1px solid var(--accent-gold)">
+       <div class="card-header"><span class="card-title">🕘 Lịch sử thay đổi (${rows.length})</span>
+         <button class="btn btn-sm btn-secondary" style="font-size:0.7rem" onclick="document.getElementById('order-history-panel').remove()">Đóng</button>
+       </div>
+       <div style="padding:4px">${list}</div>
+     </div>`);
+}
+
+// Khôi phục đơn về 1 bản cũ trong lịch sử (đặt updated_at = now để bản này thắng LWW và đẩy lên cloud)
+async function restoreFromHistory(historyId, orderId) {
+  const h = await db.history.get(historyId);
+  if (!h) { showToast('Không tìm thấy bản lịch sử.', 'error'); return; }
+  let snap = {}; try { snap = JSON.parse(h.snapshot); } catch (e) {}
+  showConfirm('Khôi phục đơn về bản này? Bản hiện tại sẽ được lưu vào lịch sử trước khi ghi đè.', async () => {
+    const current = await db.orders.get(orderId);
+    if (current && db.history) {
+      await db.history.add({ table_name: 'orders', uuid: current.uuid || '', order_code: current.order_code || '', snapshot: JSON.stringify(current), replaced_at: new Date().toISOString(), source: 'restore' });
+    }
+    const { id, uuid, created_at, ...rest } = snap; // giữ id/uuid/created_at hiện tại, chỉ phục nội dung
+    await db.orders.update(orderId, { ...rest, updated_at: new Date().toISOString() });
+    closeDetailModal();
+    await refreshAll();
+    showToast('Đã khôi phục đơn về bản cũ!', 'success');
+  });
 }
 
 async function deleteOrder(orderId) {
@@ -1289,9 +1335,9 @@ async function saveInventory() {
 
     const existing = await db.inventory.where({ show_day: day, ticket_tier: tier }).first();
     if (existing) {
-      await db.inventory.update(existing.id, { total_stock: stock, cost_price: cost });
+      await db.inventory.update(existing.id, { total_stock: stock, cost_price: cost, updated_at: new Date().toISOString() });
     } else {
-      await db.inventory.add({ show_day: day, ticket_tier: tier, total_stock: stock, cost_price: cost });
+      await db.inventory.add({ uuid: genUUID(), show_day: day, ticket_tier: tier, total_stock: stock, cost_price: cost, updated_at: new Date().toISOString() });
     }
   }
 
@@ -1945,6 +1991,14 @@ async function importAllData(event) {
       if (data.inventory) await db.inventory.bulkAdd(data.inventory);
       if (data.settings) await db.settings.bulkAdd(data.settings);
       if (data.resales) await db.resales.bulkAdd(data.resales);
+
+      // bulkAdd BỎ QUA Dexie hook -> backfill uuid cho record thiếu để còn sync được lên cloud
+      for (const t of ['customers', 'orders', 'inventory', 'resales']) {
+        const rows = await db[t].filter(r => !r.uuid).toArray();
+        for (const r of rows) await db[t].update(r.id, { uuid: genUUID() });
+      }
+      // Đẩy toàn bộ dữ liệu vừa import lên cloud (nếu đang kết nối)
+      if (typeof window.reconcileSync === 'function') await window.reconcileSync(true);
 
       await loadSettings();
       await refreshAll();

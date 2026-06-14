@@ -27,6 +27,13 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
+      - name: Cache-bust assets bằng commit SHA (để điện thoại/máy luôn nhận bản mới)
+        run: |
+          SHA="${GITHUB_SHA::8}"
+          sed -i "s|app.js?v=[^\"]*|app.js?v=$SHA|g; s|sync.js?v=[^\"]*|sync.js?v=$SHA|g; s|style.css?v=[^\"]*|style.css?v=$SHA|g" index.html
+          echo "Đã gắn version $SHA vào app.js/sync.js/style.css"
+          grep -n "?v=" index.html || true
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
