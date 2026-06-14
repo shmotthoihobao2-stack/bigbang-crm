@@ -24,18 +24,30 @@
       caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
     }
   </script>
-  <!-- Dexie.js for IndexedDB -->
-  <script src="https://unpkg.com/dexie@3/dist/dexie.js"></script>
-  <!-- html2canvas for bill PNG -->
-  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-  <!-- Chart.js for dashboard -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <!-- Supabase (đồng bộ cloud — không cấu hình thì app vẫn chạy local) -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- QRCode.js for bill QR -->
-  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-  <!-- EmailJS for sending ticket confirmation emails -->
-  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+  <!-- Dexie.js for IndexedDB — pinned @3.2.7 -->
+  <script src="https://unpkg.com/dexie@3.2.7/dist/dexie.js"
+          integrity="sha384-reBVfKAU1UxUqmRTQ6ntlvTjjJgZ0CwiFjKeeBjJRJQRZOytUnuR+MpZjm4dQOT+"
+          crossorigin="anonymous"></script>
+  <!-- html2canvas for bill PNG — pinned @1.4.1 -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"
+          integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H"
+          crossorigin="anonymous"></script>
+  <!-- Chart.js for dashboard — pinned @4.4.0 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+          integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+          crossorigin="anonymous"></script>
+  <!-- Supabase (đồng bộ cloud — không cấu hình thì app vẫn chạy local) — pinned @2.108.1 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
+          integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
+          crossorigin="anonymous"></script>
+  <!-- QRCode.js for bill QR — pinned @1.4.4 -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"
+          integrity="sha384-lQXOAyZwHXE55JFyrOMB7nY2Wv+m5ZWNtJcHrd1rceRQXAYNLak8ukN5TjBTcIwz"
+          crossorigin="anonymous"></script>
+  <!-- EmailJS for sending ticket confirmation emails — pinned @4.4.1 -->
+  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4.4.1/dist/email.min.js"
+          integrity="sha384-SALc35EccAf6RzGw4iNsyj7kTPr33K7RoGzYu+7heZhT8s0GZouafRiCg1qy44AS"
+          crossorigin="anonymous"></script>
   <script>emailjs.init('lhJZwyjgcDzYQM7uc');</script>
 </head>
 <body>
@@ -808,7 +820,10 @@
   <!-- Hidden bill render target -->
   <div id="bill-render-target" style="position:fixed;left:-9999px;top:0;"></div>
 
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <!-- SheetJS for Excel export — pinned @0.20.3 -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+          integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+          crossorigin="anonymous"></script>
   <script src="app.js"></script>
   <script src="sync.js"></script>
 </body>

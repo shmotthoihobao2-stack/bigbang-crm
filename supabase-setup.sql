@@ -9,6 +9,7 @@ create table if not exists customers (
   uuid text primary key,
   name text,
   phone text,
+  email text default '',
   zalo text,
   social text,
   source text,
@@ -31,6 +32,7 @@ create table if not exists orders (
   status text,
   delivery_method text,
   ctv text,
+  payment_proof text default '',
   seat_number text default '',
   ticket_source text default '',
   combo_info text default '',
@@ -156,6 +158,11 @@ $$;
 revoke all on function public.lookup_order(text, text) from public;
 grant execute on function public.lookup_order(text, text) to anon;
 grant execute on function public.lookup_order(text, text) to authenticated;
+
+-- ===== NÂNG CẤP DB CŨ (idempotent — chạy lại không hỏng) =====
+-- Nếu DB đã tạo trước Kaizen 2 (upload ảnh) và Kaizen 3.5 (email):
+alter table if exists orders add column if not exists payment_proof text default '';
+alter table if exists customers add column if not exists email text default '';
 
 -- ===== XONG! =====
 -- Bước tiếp theo: vào Authentication > Users > Add user

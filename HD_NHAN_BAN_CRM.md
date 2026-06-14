@@ -31,12 +31,24 @@ Khi khách hàng nhận file `crm-source.zip`, hãy yêu cầu họ làm đúng 
    Tạo 1 tài khoản (Email + Mật khẩu) để cấp quyền cho Chủ shop mới (tài khoản này dùng để đăng nhập kết nối API).
 
 ### BƯỚC 2: CẬP NHẬT KẾT NỐI VÀO SOURCE CODE
-Khách hàng cần mở thư mục code và sửa 1 file duy nhất để trỏ trang "Tra cứu" về Database mới của họ:
+Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Database mới của họ:
 
 1. Vào Supabase -> **Project Settings** (icon bánh răng) -> **API**.
 2. Copy `Project URL` và `Project API Keys (anon, public)`.
-3. Mở file **`tracuu.html`** bằng Notepad (hoặc VSCode).
-4. Tìm đến **Dòng 15, 16**:
+
+**File thứ nhất — `sync.js`** (app chính, QUAN TRỌNG NHẤT):
+3. Mở file **`sync.js`** bằng Notepad (hoặc VSCode).
+4. Tìm đến **Dòng 29, 30** (gần đầu file):
+   ```javascript
+   const DEFAULT_SUPABASE_URL = 'https://...supabase.co';
+   const DEFAULT_SUPABASE_KEY = 'eyJ...';
+   ```
+   Thay bằng `Project URL` và `Anon Key` của khách. Lưu file (`Ctrl + S`).
+   > ⚠️ **Bắt buộc** — nếu bỏ qua bước này, dữ liệu của khách sẽ ghi vào Database của chủ mã nguồn!
+
+**File thứ hai — `tracuu.html`** (trang tra cứu công khai):
+5. Mở file **`tracuu.html`** bằng Notepad (hoặc VSCode).
+6. Tìm đến **Dòng 15, 16**:
    ```javascript
    const SUPABASE_URL = 'ĐIỀN_PROJECT_URL_CỦA_KHÁCH_VÀO_ĐÂY';
    const SUPABASE_ANON_KEY = 'ĐIỀN_ANON_KEY_CỦA_KHÁCH_VÀO_ĐÂY';

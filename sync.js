@@ -36,6 +36,7 @@ let syncTimer = null;
 let pulling = false;           // đang pull => hooks không enqueue (tránh vòng lặp)
 const SYNC_TABLES = ['customers', 'orders', 'inventory', 'resales'];
 const SETTINGS_NO_SYNC = ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'lastBackup'];
+const outboxRetryCount = new Map(); // theo dõi số lần lỗi để bỏ qua item kẹt vĩnh viễn
 
 function genUUID() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -129,7 +130,7 @@ async function toCloud(tableName, rec) {
       combo_info: rec.combo_info || '',
       payment_proof: rec.payment_proof || '',
       note: rec.note || '', created_at: rec.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(), deleted: false
+      updated_at: new Date().toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'inventory') {
@@ -181,9 +182,18 @@ async function processOutbox() {
       }
       await db.outbox.delete(item.id);
     } catch (e) {
-      console.error('push fail', item.table_name, e);
+      const retries = (outboxRetryCount.get(item.id) || 0) + 1;
+      outboxRetryCount.set(item.id, retries);
+      console.error('push fail', item.table_name, e, `(lần ${retries}/3)`);
+      if (retries >= 3) {
+        console.error('Outbox item bỏ qua sau 3 lần lỗi:', item);
+        await db.outbox.delete(item.id);
+        outboxRetryCount.delete(item.id);
+        if (typeof showToast === 'function') showToast('Bỏ qua 1 bản ghi lỗi đồng bộ', 'warning');
+        continue;
+      }
       updateSyncStatus('error');
-      return; // dừng, giữ thứ tự — thử lại lần sau
+      return; // dừng, thử lại lần sau
     }
   }
   // còn nữa thì đẩy tiếp
@@ -537,8 +547,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }, 300);
 
-  // Đăng ký PWA service worker (cần chạy qua http://, không chạy với file://)
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(e => console.log('SW:', e.message));
-  }
+  // Service Worker đã vô hiệu hóa theo quyết định HANDOFF.md (cache cứng đầu)
+  // index.html đã unregister toàn bộ SW on load — không đăng ký lại ở đây
 });

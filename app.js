@@ -25,6 +25,8 @@ db.version(2).stores({
 // ===== STATE =====
 let currentTab = 'dashboard';
 let currentStatusFilter = 'all';
+let ordersPage = 0;         // trang hiện tại trong danh sách đơn hàng
+const PAGE_SIZE = 50;       // số đơn mỗi trang
 let confirmCallback = null;
 let chartsInitialized = false;
 let chartOrdersByDate = null;
@@ -44,7 +46,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Init settings if first time
   const pwd = await db.settings.get('password');
   if (!pwd) {
-    await db.settings.put({ key: 'password', value: DEFAULT_PASSWORD });
+    await db.settings.put({ key: 'password', value: await sha256(DEFAULT_PASSWORD) });
+  } else if (pwd.value.length !== 64) {
+    // Migration: mật khẩu plaintext cũ → tự hash lại 1 lần, user không cần làm gì
+    await db.settings.put({ key: 'password', value: await sha256(pwd.value) });
   }
   const tiers = await db.settings.get('ticketTiers');
   if (!tiers) {
@@ -61,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Ẩn gợi ý mật khẩu mặc định nếu user đã đổi mật khẩu
   const curPwd = await db.settings.get('password');
-  if (curPwd && curPwd.value !== DEFAULT_PASSWORD) {
+  if (curPwd && curPwd.value !== await sha256(DEFAULT_PASSWORD)) {
     const hint = document.getElementById('default-pwd-hint');
     if (hint) hint.style.display = 'none';
   }
@@ -82,9 +87,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function handleLogin() {
   const input = document.getElementById('login-password').value;
   const stored = await db.settings.get('password');
-  const pwd = stored ? stored.value : DEFAULT_PASSWORD;
+  const pwd = stored ? stored.value : await sha256(DEFAULT_PASSWORD);
 
-  if (input === pwd) {
+  if (await sha256(input) === pwd) {
     sessionStorage.setItem('bb_logged_in', 'true');
     showApp();
   } else {
@@ -116,7 +121,7 @@ async function changePassword() {
     showToast('Mật khẩu phải ít nhất 4 ký tự', 'error');
     return;
   }
-  await db.settings.put({ key: 'password', value: newPwd });
+  await db.settings.put({ key: 'password', value: await sha256(newPwd) });
   document.getElementById('new-password').value = '';
   showToast('Đã đổi mật khẩu thành công!', 'success');
 }
@@ -317,6 +322,18 @@ function esc(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// Chỉ cho phép http/https/tel/mailto làm href — chặn javascript: scheme
+function safeUrl(url) {
+  if (!url) return '#';
+  return /^(https?:\/\/|tel:|mailto:)/i.test(String(url).trim()) ? String(url).trim() : '#';
+}
+
+// SHA-256 hash dùng Web Crypto API (không cần thư viện)
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Format ô nhập tiền trực tiếp khi gõ (3500000 -> 3.500.000)
@@ -843,14 +860,14 @@ async function openDetailModal(orderId) {
         📱 ${customer ? esc(customer.phone) : 'N/A'}<br>
         ${customer && customer.zalo ? '💬 Zalo: ' + esc(customer.zalo) + '<br>' : ''}
         ${customer && customer.email ? '📧 Email: ' + esc(customer.email) + '<br>' : ''}
-        ${customer && customer.social ? '🌐 <a href="' + esc(customer.social) + '" target="_blank" style="color:var(--accent-blue);text-decoration:underline" onclick="event.stopPropagation()">' + esc(customer.social) + '</a><br>' : ''}
+        ${customer && customer.social ? '🌐 <a href="' + safeUrl(customer.social) + '" target="_blank" rel="noopener" style="color:var(--accent-blue);text-decoration:underline" onclick="event.stopPropagation()">' + esc(customer.social) + '</a><br>' : ''}
         🏷️ Nguồn: ${customer ? esc(customer.source) : 'N/A'}
         ${vipHtml}
         
         <div style="margin-top:12px">
           <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Mẫu tin nhắn chốt đơn:</div>
           <div style="position:relative">
-            <textarea id="msg-content-${order.id}" style="width:100%;height:85px;background:var(--bg-tertiary);border:1px solid rgba(255,255,255,0.05);border-radius:6px;color:var(--text-secondary);padding:8px;font-size:0.8rem;resize:none" readonly>${msgTemplate}</textarea>
+            <textarea id="msg-content-${order.id}" style="width:100%;height:85px;background:var(--bg-tertiary);border:1px solid rgba(255,255,255,0.05);border-radius:6px;color:var(--text-secondary);padding:8px;font-size:0.8rem;resize:none" readonly>${esc(msgTemplate)}</textarea>
             <button class="btn btn-secondary" style="position:absolute;bottom:8px;right:8px;padding:4px 8px;font-size:0.7rem;background:var(--bg-secondary)" onclick="copyMessageText('${order.id}')">📋 Copy</button>
           </div>
         </div>
@@ -876,7 +893,7 @@ async function openDetailModal(orderId) {
     <div class="card" style="margin-bottom:var(--space-md)">
       <div class="card-header"><span class="card-title">📸 Ủy nhiệm chi (Bill)</span></div>
       <div class="order-info" style="text-align:center">
-        ${order.payment_proof ? `<a href="${order.payment_proof}" target="_blank"><img src="${order.payment_proof}" style="max-width:100%;max-height:150px;border-radius:8px;margin-bottom:8px;object-fit:contain;background:rgba(0,0,0,0.2)"></a>` : '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:8px">Chưa có ảnh Ủy nhiệm chi</p>'}
+        ${order.payment_proof ? `<a href="${esc(order.payment_proof)}" target="_blank" rel="noopener"><img src="${esc(order.payment_proof)}" style="max-width:100%;max-height:150px;border-radius:8px;margin-bottom:8px;object-fit:contain;background:rgba(0,0,0,0.2)"></a>` : '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:8px">Chưa có ảnh Ủy nhiệm chi</p>'}
         <div>
           <button class="btn btn-secondary" style="font-size:0.75rem;padding:6px 12px" onclick="document.getElementById('upload-proof-${order.id}').click()">
             ${order.payment_proof ? 'Thay ảnh khác' : 'Tải ảnh lên'}
@@ -1062,7 +1079,7 @@ async function refreshOrders() {
     });
   }
 
-  // Render
+  // Render (phân trang)
   const container = document.getElementById('orders-list');
   if (filtered.length === 0) {
     container.innerHTML = `
@@ -1075,7 +1092,10 @@ async function refreshOrders() {
     return;
   }
 
-  container.innerHTML = filtered.map(order => {
+  const totalFiltered = filtered.length;
+  const visible = filtered.slice(0, (ordersPage + 1) * PAGE_SIZE);
+
+  container.innerHTML = visible.map(order => {
     const c = customerMap[order.customer_id];
     return `
       <div class="order-card" onclick="openDetailModal(${order.id})">
@@ -1086,7 +1106,7 @@ async function refreshOrders() {
         <div class="order-card-body">
           <div class="order-info">
             <strong>${c ? esc(c.name) : 'N/A'}</strong> · ${c ? esc(c.phone) : ''}
-            ${c && c.social ? '<br><a href="' + esc(c.social) + '" target="_blank" style="color:var(--accent-blue);font-size:0.75rem" onclick="event.stopPropagation()">🌐 Facebook</a>' : ''}<br>
+            ${c && c.social ? '<br><a href="' + safeUrl(c.social) + '" target="_blank" rel="noopener" style="color:var(--accent-blue);font-size:0.75rem" onclick="event.stopPropagation()">🌐 Facebook</a>' : ''}<br>
             ${showDayLabel(order.show_day)} · ${esc(order.ticket_tier)} × ${order.quantity}
             ${order.seat_number ? '<br><span style="color:var(--text-gold)">💺 ' + esc(order.seat_number) + '</span>' : ''}
             ${order.ticket_source ? '<br><span style="color:var(--accent-blue)">📦 ' + esc(order.ticket_source) + '</span>' : ''}
@@ -1101,6 +1121,19 @@ async function refreshOrders() {
       </div>
     `;
   }).join('');
+
+  if (totalFiltered > visible.length) {
+    container.innerHTML += `
+      <div style="text-align:center;padding:16px 0 8px">
+        <button class="btn btn-secondary" onclick="loadMoreOrders()" style="min-width:180px">
+          Tải thêm ${Math.min(PAGE_SIZE, totalFiltered - visible.length)} đơn
+        </button>
+        <div style="color:var(--text-muted);font-size:0.75rem;margin-top:6px">
+          Đang hiển thị ${visible.length}/${totalFiltered} đơn
+        </div>
+      </div>
+    `;
+  }
 }
 
 function setStatusFilter(status) {
@@ -1114,7 +1147,13 @@ function setStatusFilter(status) {
 let filterTimeout = null;
 function filterOrders() {
   clearTimeout(filterTimeout);
+  ordersPage = 0; // reset về trang đầu khi filter/search thay đổi
   filterTimeout = setTimeout(refreshOrders, 200);
+}
+
+function loadMoreOrders() {
+  ordersPage++;
+  refreshOrders();
 }
 
 // ===== INVENTORY =====
@@ -1597,7 +1636,7 @@ async function generateBill(orderId) {
 
   // Generate QR code
   try {
-    const tracuuBase = window.location.origin + '/tracuu.html';
+    const tracuuBase = new URL('tracuu.html', window.location.href).href;
     const qrUrl = tracuuBase + '?code=' + encodeURIComponent(order.order_code);
     const qr = qrcode(0, 'M');
     qr.addData(qrUrl);
@@ -1778,7 +1817,7 @@ async function exportCSV() {
     ws2['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }];
 
     // Tạo sheet Tổng hợp
-    const confirmed = orders.filter(o => ['đã cọc', 'đã thanh toán đủ', 'đã giao'].includes(o.status));
+    const confirmed = orders.filter(o => ['đã cọc', 'đã thanh toán đủ', 'đã giao vé'].includes(o.status));
     const summaryData = [
       { 'Chỉ số': 'Tổng đơn hàng', 'Giá trị': orders.length },
       { 'Chỉ số': 'Đơn đã chốt', 'Giá trị': confirmed.length },
@@ -2337,7 +2376,7 @@ function showToast(message, type = 'info') {
   toast.className = `toast ${type}`;
 
   const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
-  toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span><span>${message}</span>`;
+  toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span><span>${esc(message)}</span>`;
 
   container.appendChild(toast);
 
