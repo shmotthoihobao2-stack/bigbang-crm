@@ -36,7 +36,7 @@ let syncTimer = null;
 let pulling = false;           // đang pull => hooks không enqueue (tránh vòng lặp)
 const SYNC_TABLES = ['customers', 'orders', 'inventory', 'resales'];
 const SETTINGS_NO_SYNC = ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'lastBackup'];
-const outboxRetryCount = new Map(); // theo dõi số lần lỗi để bỏ qua item kẹt vĩnh viễn
+const MAX_OUTBOX_RETRIES = 5; // số lần lỗi tối đa cho 1 item trước khi bỏ qua (lưu bền trong record outbox)
 
 function genUUID() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -165,6 +165,8 @@ async function processOutbox() {
   const items = await db.outbox.orderBy('id').limit(50).toArray();
   if (items.length === 0) { updateSyncStatus(); return; }
 
+  let progressed = 0; // số item đã rời hàng đợi (thành công hoặc bị loại) — để chặn đệ quy vô hạn
+  let hadError = false;
   for (const item of items) {
     try {
       const payload = JSON.parse(item.payload);
@@ -176,30 +178,33 @@ async function processOutbox() {
         if (error) throw error;
       } else {
         const cloudRec = await toCloud(item.table_name, payload);
-        if (!cloudRec.uuid) { await db.outbox.delete(item.id); continue; }
+        if (!cloudRec.uuid) { await db.outbox.delete(item.id); progressed++; continue; }
         const { error } = await sb.from(item.table_name).upsert(cloudRec);
         if (error) throw error;
       }
       await db.outbox.delete(item.id);
+      progressed++;
     } catch (e) {
-      const retries = (outboxRetryCount.get(item.id) || 0) + 1;
-      outboxRetryCount.set(item.id, retries);
-      console.error('push fail', item.table_name, e, `(lần ${retries}/3)`);
-      if (retries >= 3) {
-        console.error('Outbox item bỏ qua sau 3 lần lỗi:', item);
+      const retries = (item.retries || 0) + 1; // đếm bền trong record -> KHÔNG reset khi F5
+      const msg = (e && e.message) ? e.message : String(e);
+      console.error('push fail', item.table_name, msg, `(lần ${retries}/${MAX_OUTBOX_RETRIES})`);
+      if (retries >= MAX_OUTBOX_RETRIES) {
+        console.error('Outbox item bỏ qua sau nhiều lần lỗi:', item, msg);
         await db.outbox.delete(item.id);
-        outboxRetryCount.delete(item.id);
-        if (typeof showToast === 'function') showToast('Bỏ qua 1 bản ghi lỗi đồng bộ', 'warning');
-        continue;
+        progressed++;
+        if (typeof showToast === 'function') showToast('Bỏ qua 1 bản ghi lỗi đồng bộ: ' + msg, 'warning');
+      } else {
+        await db.outbox.update(item.id, { retries, last_error: msg });
+        hadError = true;
       }
-      updateSyncStatus('error');
-      return; // dừng, thử lại lần sau
+      // KHÔNG return: item lỗi không được chặn các item phía sau (chống head-of-line blocking)
     }
   }
-  // còn nữa thì đẩy tiếp
+  updateSyncStatus(hadError ? 'error' : undefined);
+  // Còn nữa & vừa có tiến triển & batch đầy => xử lý tiếp. Nếu cả batch đều kẹt (progressed=0) thì dừng,
+  // chờ interval 30s sau thử lại (tránh đệ quy vô hạn với item lỗi).
   const remaining = await db.outbox.count();
-  if (remaining > 0) processOutbox();
-  else updateSyncStatus();
+  if (remaining > 0 && progressed > 0 && items.length === 50) processOutbox();
 }
 
 // ===== KÉO DỮ LIỆU CLOUD VỀ & MERGE =====
