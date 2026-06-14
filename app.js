@@ -976,14 +976,16 @@ async function showOrderHistory(uuid, orderId) {
 async function restoreFromHistory(historyId, orderId) {
   const h = await db.history.get(historyId);
   if (!h) { showToast('Không tìm thấy bản lịch sử.', 'error'); return; }
-  let snap = {}; try { snap = JSON.parse(h.snapshot); } catch (e) {}
+  let snap = null; try { snap = JSON.parse(h.snapshot); } catch (e) {}
+  if (!snap || typeof snap !== 'object' || !Object.keys(snap).length) { showToast('Bản lịch sử lỗi, không khôi phục được.', 'error'); return; }
   showConfirm('Khôi phục đơn về bản này? Bản hiện tại sẽ được lưu vào lịch sử trước khi ghi đè.', async () => {
     const current = await db.orders.get(orderId);
     if (current && db.history) {
       await db.history.add({ table_name: 'orders', uuid: current.uuid || '', order_code: current.order_code || '', snapshot: JSON.stringify(current), replaced_at: new Date().toISOString(), source: 'restore' });
     }
     const { id, uuid, created_at, ...rest } = snap; // giữ id/uuid/created_at hiện tại, chỉ phục nội dung
-    await db.orders.update(orderId, { ...rest, updated_at: new Date().toISOString() });
+    // deleted_at: null -> nếu bản cũ từng bị đánh dấu xóa, khôi phục KHÔNG để đơn rớt lại vào Thùng rác
+    await db.orders.update(orderId, { ...rest, deleted_at: null, updated_at: new Date().toISOString() });
     closeDetailModal();
     await refreshAll();
     showToast('Đã khôi phục đơn về bản cũ!', 'success');

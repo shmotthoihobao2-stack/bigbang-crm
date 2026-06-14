@@ -43,7 +43,7 @@ const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd
 let sb = null;                 // supabase client
 let sbReady = false;           // đã đăng nhập thành công
 let syncTimer = null;
-let pulling = false;           // đang pull => hooks không enqueue (tránh vòng lặp)
+let pulling = 0;               // >0 => đang pull/backfill => hooks không enqueue. Counter để pullAll & reconcile không stomp cờ nhau.
 const SYNC_TABLES = ['customers', 'orders', 'inventory', 'resales'];
 const SETTINGS_NO_SYNC = ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'lastBackup'];
 const MAX_OUTBOX_RETRIES = 5; // số lần lỗi tối đa cho 1 item trước khi bỏ qua (lưu bền trong record outbox)
@@ -251,8 +251,9 @@ async function reconcile(forceAll = false) {
   if (!sbReady || !navigator.onLine || reconciling) return;
   reconciling = true;
   try {
-    // Mở lại các item đã "park" để thử lại (đặc biệt khi user bấm Đồng bộ lại toàn bộ)
-    await db.outbox.toCollection().modify(i => { if (i.parked) { i.parked = 0; i.retries = 0; } });
+    // CHỈ mở lại item "park" khi user CHỦ ĐỘNG bấm "Đồng bộ lại toàn bộ" (forceAll).
+    // Tránh: reconcile định kỳ 3 phút un-park liên tục -> item lỗi vĩnh viễn bị thử lại bão hòa.
+    if (forceAll) await db.outbox.toCollection().modify(i => { if (i.parked) { i.parked = 0; i.retries = 0; } });
     await dedupeOrderCodes(); // xử lý trùng mã trước khi đẩy lên
 
     for (const t of SYNC_TABLES) {
@@ -267,9 +268,9 @@ async function reconcile(forceAll = false) {
       for (const loc of locals) {
         if (!loc.uuid) {                       // backfill uuid cho record cũ
           loc.uuid = genUUID();
-          pulling = true;
+          pulling++;
           await db[t].update(loc.id, { uuid: loc.uuid });
-          pulling = false;
+          pulling--;
         }
         const cloud = cloudMap.get(loc.uuid);
         const locDeleted = !!loc.deleted_at;
@@ -306,7 +307,7 @@ async function snapshotHistory(table, oldRec, source) {
 // ===== KÉO DỮ LIỆU CLOUD VỀ & MERGE =====
 async function pullAll(showResult) {
   if (!sbReady) return;
-  pulling = true;
+  pulling++;
   try {
     const nowIso = new Date().toISOString();
     // 1. Customers trước (orders cần map customer_uuid -> id local)
@@ -410,7 +411,7 @@ async function pullAll(showResult) {
     if (showResult) showToast('Lỗi đồng bộ: ' + (e.message || e), 'error');
     updateSyncStatus('error');
   } finally {
-    pulling = false;
+    pulling--;
     updateSyncStatus();
   }
 }
@@ -422,9 +423,9 @@ async function firstSyncUpload() {
     for (const r of rows) {
       if (!r.uuid) {
         r.uuid = genUUID();
-        pulling = true; // tránh hook enqueue 2 lần
+        pulling++; // tránh hook enqueue 2 lần
         await db[tableName].update(r.id, { uuid: r.uuid });
-        pulling = false;
+        pulling--;
       }
       await enqueue(tableName, 'upsert', r);
     }
@@ -540,9 +541,9 @@ async function setupSupabase() {
     for (const r of rows) {
       if (!r.uuid) {
         r.uuid = genUUID();
-        pulling = true;
+        pulling++;
         await db[tableName].update(r.id, { uuid: r.uuid });
-        pulling = false;
+        pulling--;
         needsUpload = true;
       }
     }
@@ -584,8 +585,10 @@ async function forceSyncAll() {
   showToast('Đang đẩy lại toàn bộ dữ liệu lên cloud...', 'info');
   await pullAll(false);       // kéo cloud về trước để biết cái gì đã có
   await reconcile(true);      // force: enqueue mọi record local còn thiếu/khác
-  const left = await db.outbox.count();
-  showToast(left > 0 ? `Còn ${left} thay đổi đang đẩy lên...` : 'Đã đồng bộ toàn bộ lên cloud! ✅', left > 0 ? 'info' : 'success');
+  const left = await db.outbox.filter(i => !i.parked).count();
+  const parked = await db.outbox.filter(i => i.parked).count();
+  if (parked > 0) showToast(`${parked} bản ghi vẫn lỗi đồng bộ — kiểm tra mạng rồi bấm lại`, 'warning');
+  else showToast(left > 0 ? `Còn ${left} thay đổi đang đẩy lên...` : 'Đã đồng bộ toàn bộ lên cloud! ✅', left > 0 ? 'info' : 'success');
 }
 window.forceSyncAll = forceSyncAll;
 
@@ -640,7 +643,12 @@ window.uploadPaymentProofToSupabase = async function(file, orderCode) {
   return publicUrl;
 };
 
-window.addEventListener('online', () => { updateSyncStatus(); reconcile(); pullAll(false); });
+window.addEventListener('online', async () => {
+  updateSyncStatus();
+  // Mạng vừa có lại -> mở khoá item từng "park" (có thể chỉ lỗi do mất mạng) để thử lại
+  try { await db.outbox.toCollection().modify(i => { if (i.parked) { i.parked = 0; i.retries = 0; } }); } catch (e) {}
+  reconcile(); pullAll(false);
+});
 window.addEventListener('offline', updateSyncStatus);
 // Khi quay lại app (mở tab/khoá màn hình điện thoại) -> reconcile để đẩy nốt thứ còn kẹt
 document.addEventListener('visibilitychange', () => { if (!document.hidden && sbReady) { reconcile(); pullAll(false); } });
