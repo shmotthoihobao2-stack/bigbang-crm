@@ -28,9 +28,7 @@ let currentStatusFilter = 'all';
 let ordersPage = 0;         // trang hiện tại trong danh sách đơn hàng
 const PAGE_SIZE = 50;       // số đơn mỗi trang
 let confirmCallback = null;
-let chartsInitialized = false;
 let chartOrdersByDate = null;
-let chartSource = null;
 let chartTier = null;
 
 // ===== DEFAULT SETTINGS =====
@@ -40,6 +38,13 @@ const STATUSES = ['mới', 'đã cọc', 'đã thanh toán đủ', 'đã giao v�
 const RESALE_STATUSES = ['chờ rao', 'đang rao', 'đã pass', 'hủy ký gửi'];
 const RESALE_REASONS = ['không đi được', 'đổi hạng vé', 'khác'];
 const ACTIVE_STATUSES = ['đã cọc', 'đã thanh toán đủ', 'đã giao vé']; // count toward "sold"
+
+// Gom mảng record thành map theo id (thay 6 chỗ copy-paste {} + forEach giống hệt nhau)
+function toMap(arr) {
+  const m = {};
+  arr.forEach(x => m[x.id] = x);
+  return m;
+}
 
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1024,8 +1029,7 @@ async function refreshTrash() {
   const allOrders = await db.orders.toArray();
   const trashed = allOrders.filter(o => o.deleted_at);
   const customers = await db.customers.toArray();
-  const customerMap = {};
-  customers.forEach(c => customerMap[c.id] = c);
+  const customerMap = toMap(customers);
 
   const container = document.getElementById('trash-list');
   if (!container) return;
@@ -1131,8 +1135,7 @@ async function refreshOrders() {
 
   // Get customers for search
   const customers = await db.customers.toArray();
-  const customerMap = {};
-  customers.forEach(c => customerMap[c.id] = c);
+  const customerMap = toMap(customers);
 
   // Filter
   let filtered = orders;
@@ -1381,8 +1384,7 @@ async function saveInventory() {
 async function refreshFollowup() {
   const orders = (await db.orders.toArray()).filter(o => !o.deleted_at);
   const customers = await db.customers.toArray();
-  const customerMap = {};
-  customers.forEach(c => customerMap[c.id] = c);
+  const customerMap = toMap(customers);
 
   const now = new Date();
   const h24ago = new Date(now - 24 * 60 * 60 * 1000);
@@ -1477,9 +1479,6 @@ async function refreshFollowup() {
 async function refreshDashboard() {
   const allOrders = await db.orders.toArray();
   const orders = allOrders.filter(o => !o.deleted_at);
-  const customers = await db.customers.toArray();
-  const customerMap = {};
-  customers.forEach(c => customerMap[c.id] = c);
 
   // Đơn ĐÃ CHỐT = đã cọc trở lên. Đơn 'mới' (khách hỏi, chưa cọc) KHÔNG tính vào doanh thu.
   const confirmedOrders = orders.filter(o => ACTIVE_STATUSES.includes(o.status));
@@ -1524,13 +1523,13 @@ async function refreshDashboard() {
   renderCountdown();
 
   // Charts
-  renderCharts(orders, customers, customerMap);
+  renderCharts(orders);
 
   // Nhắc backup nếu quá 24h
   updateBackupBanner();
 }
 
-function renderCharts(orders, customers, customerMap) {
+function renderCharts(orders) {
   const activeOrders = orders.filter(o => o.status !== 'hủy' && o.status !== 'hoàn cọc');
 
   // Chart 1: Revenue by date
@@ -1817,8 +1816,7 @@ async function exportCSV() {
   const allOrders = await db.orders.toArray();
   const orders = allOrders.filter(o => !o.deleted_at);
   const customers = await db.customers.toArray();
-  const customerMap = {};
-  customers.forEach(c => customerMap[c.id] = c);
+  const customerMap = toMap(customers);
 
   const headers = ['Mã đơn', 'Tên khách', 'SĐT', 'Zalo', 'Facebook', 'Nguồn KH', 'Ngày show', 'Hạng vé', 'SL', 'Số ghế', 'Nguồn vé', 'Combo', 'Đơn giá', 'Tổng tiền', 'Đã cọc', 'Còn thiếu', 'Trạng thái', 'Giao hàng', 'CTV', 'Ghi chú', 'Ngày tạo'];
 
@@ -1894,7 +1892,7 @@ async function exportCSV() {
     ws2['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }];
 
     // Tạo sheet Tổng hợp
-    const confirmed = orders.filter(o => ['đã cọc', 'đã thanh toán đủ', 'đã giao vé'].includes(o.status));
+    const confirmed = orders.filter(o => ACTIVE_STATUSES.includes(o.status));
     const summaryData = [
       { 'Chỉ số': 'Tổng đơn hàng', 'Giá trị': orders.length },
       { 'Chỉ số': 'Đơn đã chốt', 'Giá trị': confirmed.length },
@@ -2236,7 +2234,7 @@ async function openResaleModal() {
   // Dropdown đơn gốc: chỉ đơn đã TT đủ / đã giao (vé đã thuộc về khách)
   const orders = await db.orders.toArray();
   const customers = await db.customers.toArray();
-  const cmap = {}; customers.forEach(c => cmap[c.id] = c);
+  const cmap = toMap(customers);
   const eligible = orders.filter(o => o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé');
   const select = document.getElementById('resale-order');
   select.innerHTML = '<option value="">— Khách ngoài / nhập tay —</option>' +
@@ -2275,7 +2273,6 @@ function calcResaleRefund() {
   const asking = parseVND(document.getElementById('resale-asking').value);
   const fee = parseVND(document.getElementById('resale-fee').value);
   const preview = document.getElementById('resale-refund-preview');
-  const seatNum = document.getElementById('resale-seat').value.trim();
   if (asking > 0) {
     preview.innerHTML = `Khách nhận lại khi pass thành công: <strong style="color:var(--status-paid)">${formatVND(asking - fee)}</strong>`;
   } else {

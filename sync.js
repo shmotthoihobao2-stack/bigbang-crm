@@ -47,6 +47,7 @@ let pulling = 0;               // >0 => đang pull/backfill => hooks không enqu
 const SYNC_TABLES = ['customers', 'orders', 'inventory', 'resales'];
 const SETTINGS_NO_SYNC = ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'lastBackup'];
 const MAX_OUTBOX_RETRIES = 5; // số lần lỗi tối đa cho 1 item trước khi bỏ qua (lưu bền trong record outbox)
+const OUTBOX_BATCH = 50;      // số item xử lý mỗi vòng processOutbox (dùng 1 chỗ -> không lệch logic đệ quy)
 
 function genUUID() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -173,7 +174,7 @@ async function toCloud(tableName, rec) {
 async function processOutbox() {
   if (!sbReady || !navigator.onLine) { updateSyncStatus(); return; }
   // Bỏ qua item "parked" (đã lỗi quá nhiều) ở vòng tự động — chỉ thử lại khi reconcile/bấm tay.
-  const items = await db.outbox.orderBy('id').filter(i => !i.parked).limit(50).toArray();
+  const items = await db.outbox.orderBy('id').filter(i => !i.parked).limit(OUTBOX_BATCH).toArray();
   if (items.length === 0) { updateSyncStatus(); return; }
 
   let progressed = 0; // số item đã rời hàng đợi (thành công hoặc bị loại) — để chặn đệ quy vô hạn
@@ -215,7 +216,7 @@ async function processOutbox() {
   // Còn item chưa parked & vừa có tiến triển & batch đầy => xử lý tiếp. Nếu cả batch đều kẹt thì dừng,
   // chờ interval/reconcile thử lại (tránh đệ quy vô hạn với item lỗi).
   const remaining = await db.outbox.filter(i => !i.parked).count();
-  if (remaining > 0 && progressed > 0 && items.length === 50) processOutbox();
+  if (remaining > 0 && progressed > 0 && items.length === OUTBOX_BATCH) processOutbox();
 }
 
 // ===== RECONCILE: lưới an toàn — đảm bảo MỌI record local đều lên cloud =====
