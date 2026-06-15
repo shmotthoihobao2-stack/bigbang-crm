@@ -745,6 +745,14 @@ async function saveOrder(e) {
     showToast('Vui lòng chọn hạng vé', 'error');
     return;
   }
+  if (!Number.isFinite(qty) || qty < 1) {
+    showToast('Số lượng vé phải là số ≥ 1', 'error');
+    return;
+  }
+  if (qty > 100) {
+    showToast('Số lượng vé quá lớn (>100) — kiểm tra lại!', 'error');
+    return;
+  }
 
   const total = qty * unitPrice;
 
@@ -753,6 +761,9 @@ async function saveOrder(e) {
     return;
   }
 
+  // Bọc try/catch quanh ghi DB: nếu lỗi (quota đầy, IndexedDB blocked...) phải BÁO user,
+  // không để toast "đã lưu" im lặng không chạy -> tránh "tưởng đã lưu mà mất".
+  try {
   // Save/update customer
   let customerId;
   let existingCustomer = await db.customers.where('phone').equals(phone).first();
@@ -816,6 +827,10 @@ async function saveOrder(e) {
 
   closeOrderModal();
   await refreshAll();
+  } catch (err) {
+    console.error('saveOrder', err);
+    showToast('Lỗi lưu đơn vào máy: ' + (err && err.message ? err.message : err) + '. Đơn CHƯA được lưu!', 'error');
+  }
 }
 
 // ===== ORDER DETAIL MODAL =====
@@ -1020,11 +1035,12 @@ async function refreshTrash() {
     return;
   }
 
-  // Tự dọn: xóa vĩnh viễn đơn quá 30 ngày
+  // Tự dọn: đơn quá 30 ngày -> LƯU history TRƯỚC rồi mới xóa cứng (chống mất dữ liệu âm thầm)
   const now = Date.now();
   const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
   for (const t of trashed) {
     if (now - new Date(t.deleted_at).getTime() > THIRTY_DAYS) {
+      await snapshotToHistory('orders', t, 'auto-purge');
       await db.orders.delete(t.id);
     }
   }
@@ -1059,11 +1075,24 @@ async function restoreOrder(orderId) {
   showToast('Đã khôi phục đơn hàng! (Trạng thái: Hủy — anh đổi lại nếu cần)', 'success');
 }
 
+// Lưu snapshot bản ghi TRƯỚC khi xóa cứng -> còn khôi phục được (chống mất dữ liệu).
+// (function declaration được hoist nên refreshTrash gọi ở trên vẫn chạy.)
+async function snapshotToHistory(table, rec, source) {
+  try {
+    if (!rec || !db.history) return;
+    await db.history.add({
+      table_name: table, uuid: rec.uuid || '', order_code: rec.order_code || rec.name || '',
+      snapshot: JSON.stringify(rec), replaced_at: new Date().toISOString(), source: source || 'delete'
+    });
+  } catch (e) { /* history là phụ trợ, không bao giờ chặn thao tác chính */ }
+}
+
 async function emptyTrash() {
   showConfirm('Xóa VĨNH VIỄN tất cả đơn trong thùng rác? Không thể hoàn tác!', async () => {
     const allOrders = await db.orders.toArray();
     const trashed = allOrders.filter(o => o.deleted_at);
     for (const t of trashed) {
+      await snapshotToHistory('orders', t, 'empty-trash');
       await db.orders.delete(t.id);
     }
     await refreshTrash();
@@ -1982,29 +2011,39 @@ async function importAllData(event) {
     }
 
     showConfirm('📥 Import sẽ ghi đè toàn bộ dữ liệu hiện tại. Tiếp tục?', async () => {
-      await db.customers.clear();
-      await db.orders.clear();
-      await db.inventory.clear();
-      await db.settings.clear();
-      await db.resales.clear();
+      try {
+        // Bọc transaction: nếu lỗi GIỮA CHỪNG (bulkAdd id trùng, field sai...) Dexie tự ROLLBACK
+        // -> dữ liệu cũ KHÔNG bị mất. Trước đây clear() chạy trước, lỗi giữa chừng là mất sạch.
+        await db.transaction('rw', db.customers, db.orders, db.inventory, db.settings, db.resales, async () => {
+          await db.customers.clear();
+          await db.orders.clear();
+          await db.inventory.clear();
+          await db.settings.clear();
+          await db.resales.clear();
 
-      await db.customers.bulkAdd(data.customers);
-      await db.orders.bulkAdd(data.orders);
-      if (data.inventory) await db.inventory.bulkAdd(data.inventory);
-      if (data.settings) await db.settings.bulkAdd(data.settings);
-      if (data.resales) await db.resales.bulkAdd(data.resales);
+          await db.customers.bulkAdd(data.customers);
+          await db.orders.bulkAdd(data.orders);
+          if (data.inventory) await db.inventory.bulkAdd(data.inventory);
+          if (data.settings) await db.settings.bulkAdd(data.settings);
+          if (data.resales) await db.resales.bulkAdd(data.resales);
+        });
 
-      // bulkAdd BỎ QUA Dexie hook -> backfill uuid cho record thiếu để còn sync được lên cloud
-      for (const t of ['customers', 'orders', 'inventory', 'resales']) {
-        const rows = await db[t].filter(r => !r.uuid).toArray();
-        for (const r of rows) await db[t].update(r.id, { uuid: genUUID() });
+        // bulkAdd BỎ QUA Dexie hook -> backfill uuid cho record thiếu để còn sync được lên cloud
+        for (const t of ['customers', 'orders', 'inventory', 'resales']) {
+          const rows = await db[t].filter(r => !r.uuid).toArray();
+          for (const r of rows) await db[t].update(r.id, { uuid: genUUID() });
+        }
+        // Đẩy toàn bộ dữ liệu vừa import lên cloud (nếu đang kết nối)
+        if (typeof window.reconcileSync === 'function') await window.reconcileSync(true);
+
+        await loadSettings();
+        await refreshAll();
+        showToast('Đã import dữ liệu thành công!', 'success');
+      } catch (err) {
+        console.error('import', err);
+        showToast('Lỗi import: ' + (err && err.message ? err.message : err) + '. Dữ liệu cũ được giữ nguyên (rollback).', 'error');
+        await refreshAll();
       }
-      // Đẩy toàn bộ dữ liệu vừa import lên cloud (nếu đang kết nối)
-      if (typeof window.reconcileSync === 'function') await window.reconcileSync(true);
-
-      await loadSettings();
-      await refreshAll();
-      showToast('Đã import dữ liệu thành công!', 'success');
     });
   } catch (err) {
     showToast('Lỗi đọc file: ' + err.message, 'error');
