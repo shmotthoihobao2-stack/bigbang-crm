@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=dev">
+  <link rel="stylesheet" href="style.css?v=20260615b">
   <script>
     // ÉP BUỘC XÓA CACHE VÀ SERVICE WORKER ĐỂ UPDATE TRỰC TIẾP
     if ('serviceWorker' in navigator) {
@@ -457,6 +457,73 @@
           </div>
         </div>
 
+        <!-- Script nhắn khách -->
+        <div class="settings-section">
+          <h3 class="settings-section-title">💬 Script nhắn khách</h3>
+          <p class="text-muted mb-md" style="font-size:0.8rem">Bấm <strong>Copy</strong> → dán thẳng vào Zalo / inbox là xong.</p>
+
+          <div class="script-card">
+            <div class="script-card-header">
+              <span class="script-label">📋 Quy trình đặt vé</span>
+              <button class="btn btn-sm btn-gold" onclick="copyScript('script-quy-trinh')">📋 Copy</button>
+            </div>
+            <div class="script-preview">Bên mình quy trình rõ ràng như sau bạn nhé 👇 — Cọc trước chọn ghế trước...</div>
+            <div class="script-text" id="script-quy-trinh">Bên mình quy trình rõ ràng như sau bạn nhé 👇
+
+BƯỚC 1 — Chọn hạng &amp; đặt cọc
+Bạn báo muốn hạng nào → mình báo giá → bạn chuyển khoản hoặc đưa tiền mặt để giữ chỗ.
+
+Mức cọc theo hạng:
+- CAT: cọc 1.500.000đ
+- VIP: cọc 3.000.000đ
+- SVIP: cọc 5.000.000đ
+
+⚡ Cọc trước — chọn ghế trước. Bên mình ưu tiên chọn số ghế đẹp trong lô theo thứ tự cọc. Ai cọc sớm hơn sẽ được pick ghế trước khi có sơ đồ chính thức từ BTC.
+(Giá cuối xác nhận khi BTC công bố sơ đồ ghế chính thức.)
+
+BƯỚC 2 — Nhận bill xác nhận ngay
+Sau khi cọc, mình gửi bill qua Zalo luôn — có mã đơn riêng (VD: BB-0012). Bạn dùng mã này tự tra cứu trạng thái đơn bất cứ lúc nào tại:
+👉 https://shmotthoihobao2-stack.github.io/bigbang-crm/tracuu.html
+
+BƯỚC 3 — Thanh toán phần còn lại
+Thanh toán nốt trước khi nhận vé. Mình báo trước để bạn chuẩn bị, không gấp gáp.
+
+BƯỚC 4 — Nhận vé
+- Vé QR: gửi qua Zalo hoặc email sau khi thanh toán đủ. Nếu muốn mình giữ QR hộ cho an toàn (tránh để lộ, tránh bị hack) thì mình giữ đến gần ngày show mới giao — bạn chủ động báo.
+- Vé giấy/nội bộ: gặp trực tiếp hoặc thỏa thuận hình thức phù hợp.
+
+---
+Chính sách:
+- Cọc rồi không hoàn tiền — nhưng hỗ trợ đổi hạng linh động nếu chưa chốt/bàn giao vé
+- Quyền lợi cọc trước: cọc sớm = thứ tự ưu tiên chọn ghế đẹp cao hơn
+- Mọi thắc mắc nhắn inbox mình phản hồi nhanh nhất có thể 🙌</div>
+          </div>
+
+          <div class="script-card">
+            <div class="script-card-header">
+              <span class="script-label">🛡️ Khách lo vé giả / bị lừa</span>
+              <button class="btn btn-sm btn-gold" onclick="copyScript('script-lo-ngai')">📋 Copy</button>
+            </div>
+            <div class="script-preview">Mình hiểu bạn lo — mua vé online bây giờ phải cẩn thận, chuyện đó bình thường...</div>
+            <div class="script-text" id="script-lo-ngai">Mình hiểu bạn lo — mua vé online bây giờ phải cẩn thận, chuyện đó bình thường 👍
+
+Bên mình làm việc minh bạch nên:
+
+✅ Mỗi đơn có mã riêng — sau khi cọc bạn nhận bill ngay, có mã BB-#### để tự tra cứu đơn tại:
+👉 https://shmotthoihobao2-stack.github.io/bigbang-crm/tracuu.html
+
+✅ Vé từ nguồn chính thống — QR mình giữ nguyên đến khi bàn giao, không bị lộ hay dùng trước
+
+✅ Thanh toán trước khi nhận vé — không có chuyện đưa tiền rồi chờ mãi
+
+✅ Có bill xác nhận — mọi giao dịch đều có giấy tờ gửi Zalo/email
+
+✅ Cọc sớm — chọn ghế đẹp hơn — thứ tự ưu tiên pick ghế trong lô theo ai cọc trước, nên bạn càng chốt sớm quyền lợi càng cao
+
+Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
+          </div>
+        </div>
+
         <!-- Seed data -->
         <div class="settings-section">
           <h3 class="settings-section-title">🧪 Dữ liệu mẫu</h3>
@@ -826,7 +893,7 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
           integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
           crossorigin="anonymous"></script>
-  <script src="app.js?v=dev"></script>
-  <script src="sync.js?v=dev"></script>
+  <script src="app.js?v=20260615b"></script>
+  <script src="sync.js?v=20260615b"></script>
 </body>
 </html>

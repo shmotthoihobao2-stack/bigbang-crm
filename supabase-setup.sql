@@ -199,6 +199,33 @@ begin
   end if;
 end $$;
 
+-- ===== CHỐNG TRÙNG MÃ ĐƠN: sequence cấp số NGUYÊN TỬ (idempotent) =====
+-- Thiếu phần này: 2 máy tạo đơn gần như cùng lúc sẽ đọc cùng MAX -> đẻ TRÙNG mã (BB-0042 x2).
+-- Có sequence: mỗi lần gọi next_order_code() trả 1 số duy nhất, không bao giờ trùng dù bao nhiêu máy.
+create sequence if not exists order_code_seq;
+
+-- Seed sequence = (số đơn lớn nhất hiện có) + 1, để mã đơn chạy tiếp không nhảy/lùi.
+-- is_called=false => lần nextval() đầu tiên trả về đúng giá trị này.
+select setval(
+  'order_code_seq',
+  coalesce(
+    (select max((regexp_replace(order_code, '\D', '', 'g'))::bigint)
+       from orders where order_code ~ '^BB-[0-9]+$'),
+    0
+  ) + 1,
+  false
+);
+
+create or replace function public.next_order_code()
+returns text
+language sql
+security definer
+set search_path = public
+as $$
+  select 'BB-' || lpad(nextval('order_code_seq')::text, 4, '0');
+$$;
+grant execute on function public.next_order_code() to authenticated;
+
 -- ===== XONG! =====
 -- Bước tiếp theo: vào Authentication > Users > Add user
 -- tạo email + mật khẩu cho chủ shop, rồi nhập vào phần Cài đặt của app.

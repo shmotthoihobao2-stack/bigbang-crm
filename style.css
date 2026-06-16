@@ -1001,6 +1001,38 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.script-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin-bottom: var(--space-sm);
+}
+.script-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.script-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.script-preview {
+  padding: 8px var(--space-md);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-height: 48px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.script-text {
+  display: none;
+}
+
 .tier-list {
   display: flex;
   flex-wrap: wrap;

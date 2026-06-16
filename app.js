@@ -77,8 +77,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Check login
-  const isLoggedIn = sessionStorage.getItem('bb_logged_in');
+  const isLoggedIn = localStorage.getItem('bb_logged_in');
   if (isLoggedIn === 'true') {
+    const savedHash = localStorage.getItem('bb_pwd_hash');
+    if (savedHash && window.setSessionKey) await window.setSessionKey(savedHash);
     showApp();
   }
 
@@ -95,7 +97,9 @@ async function handleLogin() {
   const pwd = stored ? stored.value : await sha256(DEFAULT_PASSWORD);
 
   if (await sha256(input) === pwd) {
-    sessionStorage.setItem('bb_logged_in', 'true');
+    localStorage.setItem('bb_logged_in', 'true');
+    localStorage.setItem('bb_pwd_hash', pwd);
+    if (window.setSessionKey) await window.setSessionKey(pwd);
     showApp();
   } else {
     const errorEl = document.getElementById('login-error');
@@ -106,7 +110,9 @@ async function handleLogin() {
 }
 
 function handleLogout() {
-  sessionStorage.removeItem('bb_logged_in');
+  localStorage.removeItem('bb_logged_in');
+  localStorage.removeItem('bb_pwd_hash');
+  if (window.clearSessionKey) window.clearSessionKey();
   document.getElementById('app').classList.remove('active');
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('login-password').value = '';
@@ -117,6 +123,8 @@ async function showApp() {
   document.getElementById('app').classList.add('active');
   await loadSettings();
   await refreshAll();
+  // Kết nối Supabase sau khi session key đã được set (quan trọng với fresh login)
+  setTimeout(() => { if (typeof connectSupabase === 'function') connectSupabase(true); }, 200);
 }
 
 // ===== PASSWORD =====
@@ -126,8 +134,17 @@ async function changePassword() {
     showToast('Mật khẩu phải ít nhất 4 ký tự', 'error');
     return;
   }
-  await db.settings.put({ key: 'password', value: await sha256(newPwd) });
+  const newHash = await sha256(newPwd);
+  await db.settings.put({ key: 'password', value: newHash });
+  // Cập nhật phiên đăng nhập + đổi khóa mã hóa mật khẩu cloud sang key mới
+  // (nếu không: mở lại app sẽ giải mã supabasePassword bằng key cũ -> FAIL -> mất kết nối cloud)
+  if (localStorage.getItem('bb_logged_in') === 'true') localStorage.setItem('bb_pwd_hash', newHash);
+  if (window.rekeyAfterPasswordChange) await window.rekeyAfterPasswordChange(newHash);
+  else if (window.setSessionKey) await window.setSessionKey(newHash);
   document.getElementById('new-password').value = '';
+  // Ẩn gợi ý mật khẩu mặc định (đã đổi pass)
+  const hint = document.getElementById('default-pwd-hint');
+  if (hint) hint.style.display = 'none';
   showToast('Đã đổi mật khẩu thành công!', 'success');
 }
 
@@ -412,12 +429,29 @@ function validatePhone(phone) {
 
 // ===== GENERATE ORDER CODE =====
 async function generateOrderCode() {
-  // Nếu đang online với cloud: lấy mã lớn nhất TRÊN CLOUD để 2 máy không trùng nhau
-  if (typeof sbReady !== 'undefined' && sbReady && navigator.onLine) {
+  // ƯU TIÊN: mã đơn do CLOUD cấp bằng sequence NGUYÊN TỬ (next_order_code) — 2 máy gọi cùng lúc
+  // vẫn ra số khác nhau, KHÔNG BAO GIỜ trùng. (Cũ: đọc MAX rồi +1 không nguyên tử -> 2 request
+  // gần nhau cùng đọc max=41 -> cùng đẻ BB-0042. Đó là gốc của trùng mã.)
+  // Hàm RPC nằm trong supabase-setup.sql; nếu DB chưa cập nhật -> tự rơi xuống counter local.
+  if (typeof sbReady !== 'undefined' && sbReady && navigator.onLine && typeof sb !== 'undefined' && sb) {
+    try {
+      const { data, error } = await sb.rpc('next_order_code');
+      if (!error && data) {
+        const code = String(data);
+        // giữ counter local đồng bộ để fallback offline không đẻ ngược về số nhỏ hơn
+        const num = parseInt(code.replace(/\D/g, '')) || 0;
+        const stored = await db.settings.get('orderCounter');
+        const localMax = stored ? parseInt(stored.value) || 0 : 0;
+        if (num > localMax) await db.settings.put({ key: 'orderCounter', value: String(num) });
+        return code;
+      }
+    } catch (e) { /* RPC chưa có -> thử MAX cloud bên dưới */ }
+    // Fallback (DB chưa chạy SQL next_order_code): đọc MAX cloud + local rồi +1 (như bản cũ).
+    // Không nguyên tử bằng sequence nhưng vẫn giảm trùng giữa 2 máy hơn là chỉ counter local.
     try {
       const { data } = await sb.from('orders').select('order_code').order('order_code', { ascending: false }).limit(1);
       if (data && data.length) {
-        const cloudMax = parseInt((data[0].order_code || '').replace('BB-', '')) || 0;
+        const cloudMax = parseInt((data[0].order_code || '').replace(/\D/g, '')) || 0;
         const stored = await db.settings.get('orderCounter');
         const localMax = stored ? parseInt(stored.value) || 0 : 0;
         const num = Math.max(cloudMax, localMax) + 1;
@@ -426,7 +460,8 @@ async function generateOrderCode() {
       }
     } catch (e) { /* offline/lỗi -> rơi xuống counter local */ }
   }
-  // Counter riêng (chỉ tăng) => KHÔNG BAO GIỜ trùng mã đơn dù xóa/import
+  // Counter riêng (chỉ tăng) => KHÔNG BAO GIỜ trùng mã đơn dù xóa/import.
+  // LƯU Ý: 2 máy cùng OFFLINE tạo đơn vẫn có thể trùng -> reconcile() sẽ cảnh báo để sửa tay.
   const stored = await db.settings.get('orderCounter');
   let num;
   if (stored) {
@@ -774,7 +809,8 @@ async function saveOrder(e) {
   let existingCustomer = await db.customers.where('phone').equals(phone).first();
   if (existingCustomer) {
     customerId = existingCustomer.id;
-    await db.customers.update(customerId, { name, zalo, email, social, source, updated_at: new Date().toISOString() });
+    // Backfill uuid cho khách cũ (tạo trước khi bật sync) -> nếu không, sửa info KHÔNG bao giờ lên cloud
+    await db.customers.update(customerId, { name, zalo, email, social, source, uuid: existingCustomer.uuid || genUUID(), updated_at: new Date().toISOString() });
   } else {
     customerId = await db.customers.add({
       uuid: genUUID(), name, phone, zalo, email, social, source, note: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString()
@@ -905,7 +941,7 @@ async function openDetailModal(orderId) {
         💰 Đơn giá: ${formatVND(order.unit_price)}<br>
         <strong>💎 Tổng: ${formatVND(order.total)}</strong><br>
         🏦 Đã cọc: ${formatVND(order.deposit_amount)}<br>
-        ${order.total && order.deposit_amount ? '📊 Còn thiếu: ' + formatVND(order.total - order.deposit_amount) + '<br>' : ''}
+        ${order.total > 0 ? '📊 Còn thiếu: ' + formatVND((order.total || 0) - (order.deposit_amount || 0)) + '<br>' : ''}
         🚚 ${esc(order.delivery_method) || 'N/A'}<br>
         ${order.ctv ? '👤 CTV: ' + esc(order.ctv) + '<br>' : ''}
         ${order.note ? '📝 ' + esc(order.note) + '<br>' : ''}
@@ -1680,14 +1716,14 @@ async function generateBill(orderId) {
           <span>Tổng cộng</span>
           <span>${formatVND(order.total)}</span>
         </div>
-        ${order.deposit_amount ? `
+        ${order.total > 0 ? `
         <div class="bill-row" style="border:none">
           <span class="label">Đã cọc</span>
           <span class="value" style="color:#66bb6a">${formatVND(order.deposit_amount)}</span>
         </div>
         <div class="bill-row" style="border:none">
           <span class="label">Còn lại</span>
-          <span class="value" style="color:#ef5350">${formatVND(order.total - order.deposit_amount)}</span>
+          <span class="value" style="color:#ef5350">${formatVND((order.total || 0) - (order.deposit_amount || 0))}</span>
         </div>
         ` : ''}
         <div class="bill-row" style="border:none">
@@ -1893,12 +1929,16 @@ async function exportCSV() {
 
     // Tạo sheet Tổng hợp
     const confirmed = orders.filter(o => ACTIVE_STATUSES.includes(o.status));
+    const sumRevenue = confirmed.reduce((s, o) => s + (o.total || 0), 0);
+    // Tiền THỰC thu: đơn đã TT đủ / đã giao = full; đơn mới cọc = phần cọc (khớp logic Dashboard)
+    const sumReceived = confirmed.reduce((s, o) =>
+      s + ((o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') ? (o.total || 0) : (o.deposit_amount || 0)), 0);
     const summaryData = [
       { 'Chỉ số': 'Tổng đơn hàng', 'Giá trị': orders.length },
       { 'Chỉ số': 'Đơn đã chốt', 'Giá trị': confirmed.length },
-      { 'Chỉ số': 'Tổng doanh thu', 'Giá trị': confirmed.reduce((s, o) => s + (o.total || 0), 0) },
-      { 'Chỉ số': 'Tổng đã thu', 'Giá trị': confirmed.reduce((s, o) => s + (o.deposit_amount || 0), 0) },
-      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': confirmed.reduce((s, o) => s + ((o.total || 0) - (o.deposit_amount || 0)), 0) },
+      { 'Chỉ số': 'Tổng doanh thu', 'Giá trị': sumRevenue },
+      { 'Chỉ số': 'Tổng đã thu', 'Giá trị': sumReceived },
+      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': sumRevenue - sumReceived },
       { 'Chỉ số': 'Đơn mới chưa chốt', 'Giá trị': orders.filter(o => o.status === 'mới').length },
       { 'Chỉ số': 'Đơn hủy/hoàn', 'Giá trị': orders.filter(o => o.status === 'hủy' || o.status === 'hoàn cọc').length },
     ];
@@ -2012,6 +2052,9 @@ async function importAllData(event) {
       try {
         // Bọc transaction: nếu lỗi GIỮA CHỪNG (bulkAdd id trùng, field sai...) Dexie tự ROLLBACK
         // -> dữ liệu cũ KHÔNG bị mất. Trước đây clear() chạy trước, lỗi giữa chừng là mất sạch.
+        // bulkAdd BỎ QUA Dexie hook -> tự gán uuid NGAY trong object trước khi ghi (atomic trong transaction).
+        // Cũ: backfill uuid chạy NGOÀI transaction -> tắt app giữa chừng = record thiếu uuid vĩnh viễn, không sync.
+        const withUuid = (arr) => (arr || []).map(r => ({ ...r, uuid: r.uuid || genUUID() }));
         await db.transaction('rw', db.customers, db.orders, db.inventory, db.settings, db.resales, async () => {
           await db.customers.clear();
           await db.orders.clear();
@@ -2019,18 +2062,13 @@ async function importAllData(event) {
           await db.settings.clear();
           await db.resales.clear();
 
-          await db.customers.bulkAdd(data.customers);
-          await db.orders.bulkAdd(data.orders);
-          if (data.inventory) await db.inventory.bulkAdd(data.inventory);
+          await db.customers.bulkAdd(withUuid(data.customers));
+          await db.orders.bulkAdd(withUuid(data.orders));
+          if (data.inventory) await db.inventory.bulkAdd(withUuid(data.inventory));
           if (data.settings) await db.settings.bulkAdd(data.settings);
-          if (data.resales) await db.resales.bulkAdd(data.resales);
+          if (data.resales) await db.resales.bulkAdd(withUuid(data.resales));
         });
 
-        // bulkAdd BỎ QUA Dexie hook -> backfill uuid cho record thiếu để còn sync được lên cloud
-        for (const t of ['customers', 'orders', 'inventory', 'resales']) {
-          const rows = await db[t].filter(r => !r.uuid).toArray();
-          for (const r of rows) await db[t].update(r.id, { uuid: genUUID() });
-        }
         // Đẩy toàn bộ dữ liệu vừa import lên cloud (nếu đang kết nối)
         if (typeof window.reconcileSync === 'function') await window.reconcileSync(true);
 
@@ -2078,10 +2116,12 @@ async function seedData() {
     for (const tier of tiers) {
       const info = stockMap[tier] || { stock: 20, cost: 2000000 };
       await db.inventory.add({
+        uuid: genUUID(),
         show_day: day,
         ticket_tier: tier,
         total_stock: info.stock,
         cost_price: info.cost,
+        updated_at: new Date().toISOString(),
       });
     }
   }
@@ -2124,7 +2164,7 @@ async function seedData() {
   // Add customers
   const customerIds = [];
   for (const c of seedCustomers) {
-    const id = await db.customers.add({ ...c, note: '', created_at: new Date().toISOString() });
+    const id = await db.customers.add({ ...c, uuid: genUUID(), note: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
     customerIds.push(id);
   }
 
@@ -2136,6 +2176,7 @@ async function seedData() {
     const created = new Date(Date.now() - s.hoursAgo * 60 * 60 * 1000).toISOString();
 
     await db.orders.add({
+      uuid: genUUID(),
       order_code: 'BB-' + String(i + 1).padStart(4, '0'),
       customer_id: customerIds[s.ci],
       show_day: s.day,
@@ -2461,6 +2502,23 @@ async function createOrderFromResale(id) {
   }, 100);
 }
 
+// ===== SCRIPT COPY =====
+function copyScript(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.textContent.trim()
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  navigator.clipboard.writeText(text)
+    .then(() => showToast('Đã copy! Dán vào Zalo / inbox nhé 👍', 'success'))
+    .catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('Đã copy! Dán vào Zalo / inbox nhé 👍', 'success');
+    });
+}
+
 // ===== TOAST =====
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -2491,8 +2549,10 @@ function closeConfirm() {
 }
 
 function confirmOk() {
-  if (confirmCallback) confirmCallback();
+  // Đóng dialog TRƯỚC rồi mới chạy callback -> nếu callback lỗi/async throw, dialog không bị kẹt mở
+  const cb = confirmCallback;
   closeConfirm();
+  if (cb) cb();
 }
 
 // ===== FORM DIRTY CHECK: tránh mất dữ liệu đang nhập dở =====

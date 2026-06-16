@@ -42,10 +42,13 @@ const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd
 // ===== STATE =====
 let sb = null;                 // supabase client
 let sbReady = false;           // đã đăng nhập thành công
+let _realtimeChannel = null;   // giữ ref channel realtime để đóng đúng lúc (chống leak + nhận event N lần)
 let syncTimer = null;
 let pulling = 0;               // >0 => đang pull/backfill => hooks không enqueue. Counter để pullAll & reconcile không stomp cờ nhau.
 const SYNC_TABLES = ['customers', 'orders', 'inventory', 'resales'];
-const SETTINGS_NO_SYNC = ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'lastBackup'];
+// 'password' = hash mật khẩu đăng nhập app: KHÔNG sync (là credential + mã hóa supabasePassword là per-device;
+// nếu sync, đổi pass máy A -> máy B kéo hash mới nhưng key cũ -> giải mã supabasePassword FAIL -> mất cloud).
+const SETTINGS_NO_SYNC = ['password', 'supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'supabasePasswordEnc', 'lastBackup'];
 const MAX_OUTBOX_RETRIES = 5; // số lần lỗi tối đa cho 1 item trước khi bỏ qua (lưu bền trong record outbox)
 const OUTBOX_BATCH = 50;      // số item xử lý mỗi vòng processOutbox (dùng 1 chỗ -> không lệch logic đệ quy)
 
@@ -57,10 +60,57 @@ function genUUID() {
   });
 }
 
+// ===== ENCRYPT supabasePassword trong IndexedDB (chống lộ qua DevTools/extension) =====
+let _sessionKey = null;
+async function _deriveKey(hashHex) {
+  const raw = new TextEncoder().encode(hashHex);
+  const base = await crypto.subtle.importKey('raw', raw, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new TextEncoder().encode('bigbang-crm-v1'), iterations: 100000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+async function _encryptPwd(plain) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, _sessionKey, new TextEncoder().encode(plain));
+  return btoa(String.fromCharCode(...iv)) + ':' + btoa(String.fromCharCode(...new Uint8Array(ct)));
+}
+async function _decryptPwd(enc) {
+  const [ivB64, ctB64] = enc.split(':');
+  const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+  const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+  const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, _sessionKey, ct);
+  return new TextDecoder().decode(dec);
+}
+// Gọi từ app.js ngay sau khi login thành công — truyền vào sha256 hash của app password
+window.setSessionKey = async function(appPasswordHash) {
+  try { _sessionKey = await _deriveKey(appPasswordHash); } catch (e) { console.warn('setSessionKey', e); }
+};
+window.clearSessionKey = function() { _sessionKey = null; };
+// Gọi từ changePassword: giải mã supabasePassword bằng key CŨ, đổi sang key MỚI, mã hóa lại.
+// Thiếu bước này: đổi mật khẩu app -> mở lại app -> giải mã supabasePassword FAIL -> mất kết nối cloud.
+window.rekeyAfterPasswordChange = async function(newAppPasswordHash) {
+  let plain = null;
+  try {
+    const enc = (await db.settings.get('supabasePasswordEnc'))?.value;
+    if (enc && _sessionKey) plain = await _decryptPwd(enc);
+  } catch (e) { /* key cũ hỏng -> thử plaintext bên dưới */ }
+  if (!plain) plain = (await db.settings.get('supabasePassword'))?.value || null;
+  try { _sessionKey = await _deriveKey(newAppPasswordHash); } catch (e) { console.warn('rekey derive', e); }
+  if (plain && _sessionKey) {
+    try {
+      await db.settings.put({ key: 'supabasePasswordEnc', value: await _encryptPwd(plain) });
+      await db.settings.delete('supabasePassword');
+    } catch (e) { console.warn('rekey encrypt', e); }
+  }
+};
+
 // ===== HOOKS: tự bắt mọi thay đổi, không cần sửa code cũ =====
 SYNC_TABLES.forEach(tableName => {
   db[tableName].hook('creating', function (primKey, obj) {
     if (!obj.uuid) obj.uuid = genUUID();
+    // Luôn đảm bảo có updated_at -> last-write-wins so giờ THẬT, không bị toCloud gán giờ-sync giả
+    if (!obj.updated_at) obj.updated_at = obj.created_at || new Date().toISOString();
     if (!pulling) {
       const self = this;
       this.onsuccess = function (id) {
@@ -112,6 +162,17 @@ function debouncedPush() {
   syncTimer = setTimeout(processOutbox, 1500);
 }
 
+// Gộp nhiều realtime event sát nhau thành 1 lần pullAll (chống lag giật khi có chùm thay đổi)
+let _rtPullTimer = null;
+function debouncedRealtimePull() {
+  clearTimeout(_rtPullTimer);
+  _rtPullTimer = setTimeout(() => {
+    if (!sbReady) return;
+    if (!pulling) pullAll(false);
+    else debouncedRealtimePull();   // đang pull -> hoãn thêm, KHÔNG bỏ qua (kẻo mất update của máy kia)
+  }, 800);
+}
+
 // ===== CHUYỂN ĐỔI RECORD LOCAL -> CLOUD =====
 async function toCloud(tableName, rec) {
   if (tableName === 'customers') {
@@ -119,7 +180,7 @@ async function toCloud(tableName, rec) {
       uuid: rec.uuid, name: rec.name || '', phone: rec.phone || '', email: rec.email || '', zalo: rec.zalo || '',
       social: rec.social || '', source: rec.source || '', note: rec.note || '',
       created_at: rec.created_at || new Date().toISOString(),
-      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
+      updated_at: rec.updated_at || rec.created_at || new Date(0).toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'orders') {
@@ -141,14 +202,14 @@ async function toCloud(tableName, rec) {
       combo_info: rec.combo_info || '',
       payment_proof: rec.payment_proof || '',
       note: rec.note || '', created_at: rec.created_at || new Date().toISOString(),
-      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
+      updated_at: rec.updated_at || rec.created_at || new Date(0).toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'inventory') {
     return {
       uuid: rec.uuid, show_day: rec.show_day, ticket_tier: rec.ticket_tier,
       total_stock: rec.total_stock || 0, cost_price: rec.cost_price || 0,
-      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
+      updated_at: rec.updated_at || rec.created_at || new Date(0).toISOString(), deleted: !!rec.deleted_at
     };
   }
   if (tableName === 'resales') {
@@ -164,7 +225,7 @@ async function toCloud(tableName, rec) {
       original_price: rec.original_price || 0, asking_price: rec.asking_price || 0,
       service_fee: rec.service_fee || 0, seat_number: rec.seat_number || '', reason: rec.reason || '', note: rec.note || '',
       status: rec.status, created_at: rec.created_at || new Date().toISOString(),
-      updated_at: rec.updated_at || new Date().toISOString(), deleted: !!rec.deleted_at
+      updated_at: rec.updated_at || rec.created_at || new Date(0).toISOString(), deleted: !!rec.deleted_at
     };
   }
   return rec;
@@ -222,34 +283,29 @@ async function processOutbox() {
 // ===== RECONCILE: lưới an toàn — đảm bảo MỌI record local đều lên cloud =====
 // So local vs cloud theo uuid+updated_at; đẩy lên cloud những gì local thiếu/mới hơn.
 // Chống mọi kiểu "kẹt": hook lỡ enqueue (pulling race), outbox bị mất, record tạo trước khi bật sync.
-// Chống TRÙNG order_code (2 máy offline cùng sinh BB-0004): giữ đơn tạo sớm nhất, đổi mã đơn tạo sau.
+// Chống TRÙNG order_code: CHỈ phát hiện + cảnh báo, TUYỆT ĐỐI KHÔNG tự đổi mã.
+// Vì sao không tự đổi:
+//   1) order_code in trên bill + dùng để khách tra cứu (tracuu.html). Tự đổi = khách nhập mã cũ không ra đơn.
+//   2) Đổi mã theo counter LOCAL, chạy song song trên nhiều máy, KHÔNG hội tụ: mã mới máy này đẻ trùng ở máy kia
+//      -> đổi tiếp -> số đơn nhảy vô tận (BB-0004→0009→0010...) + realtime bão hoà -> lag giật.
+//   uuid mới là khóa thật; trùng mã chỉ là phiền hiển thị -> để chủ shop tự sửa tay 1 đơn.
+let _dupWarnedKey = '';
 async function dedupeOrderCodes() {
   const all = (await db.orders.toArray()).filter(o => !o.deleted_at && o.order_code);
   const byCode = {};
   for (const o of all) { (byCode[o.order_code] = byCode[o.order_code] || []).push(o); }
-  let maxNum = all.reduce((m, o) => Math.max(m, parseInt((o.order_code || '').replace('BB-', '')) || 0), 0);
-  let changed = false;
-  for (const code in byCode) {
-    const group = byCode[code];
-    if (group.length < 2) continue;
-    group.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)); // giữ đơn tạo SỚM nhất
-    for (let i = 1; i < group.length; i++) {
-      maxNum++;
-      const newCode = 'BB-' + String(maxNum).padStart(4, '0');
-      await db.orders.update(group[i].id, { order_code: newCode, updated_at: new Date().toISOString() });
-      changed = true;
-      if (typeof showToast === 'function') showToast(`Mã đơn trùng ${code} → đổi 1 đơn thành ${newCode}`, 'warning');
-    }
-  }
-  if (changed) {
-    const cur = await db.settings.get('orderCounter');
-    if (!cur || (parseInt(cur.value) || 0) < maxNum) await db.settings.put({ key: 'orderCounter', value: String(maxNum) });
+  const dups = Object.keys(byCode).filter(c => byCode[c].length > 1).sort();
+  const key = dups.join(',');
+  if (dups.length && key !== _dupWarnedKey) {   // cảnh báo 1 lần cho mỗi tập mã trùng (không spam mỗi 3 phút)
+    _dupWarnedKey = key;
+    console.warn('Mã đơn trùng (không tự đổi):', dups);
+    if (typeof showToast === 'function') showToast(`⚠️ Mã đơn trùng: ${dups.join(', ')}. Vào sửa tay 1 đơn — hệ thống KHÔNG tự đổi để khỏi hỏng mã tra cứu của khách.`, 'warning');
   }
 }
 
 let reconciling = false;
 async function reconcile(forceAll = false) {
-  if (!sbReady || !navigator.onLine || reconciling) return;
+  if (!sbReady || !navigator.onLine || reconciling || pulling) return; // không chồng lên pullAll đang ghi DB
   reconciling = true;
   try {
     // CHỈ mở lại item "park" khi user CHỦ ĐỘNG bấm "Đồng bộ lại toàn bộ" (forceAll).
@@ -270,8 +326,7 @@ async function reconcile(forceAll = false) {
         if (!loc.uuid) {                       // backfill uuid cho record cũ
           loc.uuid = genUUID();
           pulling++;
-          await db[t].update(loc.id, { uuid: loc.uuid });
-          pulling--;
+          try { await db[t].update(loc.id, { uuid: loc.uuid }); } finally { pulling--; }
         }
         const cloud = cloudMap.get(loc.uuid);
         const locDeleted = !!loc.deleted_at;
@@ -425,8 +480,7 @@ async function firstSyncUpload() {
       if (!r.uuid) {
         r.uuid = genUUID();
         pulling++; // tránh hook enqueue 2 lần
-        await db[tableName].update(r.id, { uuid: r.uuid });
-        pulling--;
+        try { await db[tableName].update(r.id, { uuid: r.uuid }); } finally { pulling--; }
       }
       await enqueue(tableName, 'upsert', r);
     }
@@ -439,10 +493,28 @@ async function firstSyncUpload() {
 
 // ===== KẾT NỐI =====
 async function connectSupabase(silent) {
+  // Đã kết nối rồi: chỉ auto-migrate plaintext → encrypted nếu session key có sẵn, rồi return.
+  if (sbReady) {
+    if (_sessionKey) {
+      const _old = (await db.settings.get('supabasePassword'))?.value;
+      if (_old) {
+        try { await db.settings.put({ key: 'supabasePasswordEnc', value: await _encryptPwd(_old) }); await db.settings.delete('supabasePassword'); } catch (e) {}
+      }
+    }
+    return true;
+  }
+
   let url = (await db.settings.get('supabaseUrl'))?.value;
   let key = (await db.settings.get('supabaseKey'))?.value;
   const email = (await db.settings.get('supabaseEmail'))?.value;
-  const password = (await db.settings.get('supabasePassword'))?.value;
+
+  // Đọc password: ưu tiên bản encrypted, fallback plaintext cũ (migration path)
+  let password = null;
+  const _encEntry = (await db.settings.get('supabasePasswordEnc'))?.value;
+  if (_encEntry && _sessionKey) {
+    try { password = await _decryptPwd(_encEntry); } catch (e) {}
+  }
+  if (!password) password = (await db.settings.get('supabasePassword'))?.value;
 
   // Dùng defaults nếu settings bị mất (do xóa cache)
   if (!url) { url = DEFAULT_SUPABASE_URL; await db.settings.put({ key: 'supabaseUrl', value: url }); }
@@ -462,16 +534,26 @@ async function connectSupabase(silent) {
     sbReady = true;
     updateSyncStatus();
 
+    // Auto-migrate: nếu vẫn còn plaintext → encrypt ngay và xóa
+    if (_sessionKey) {
+      const _oldPwd = (await db.settings.get('supabasePassword'))?.value;
+      if (_oldPwd) {
+        try { await db.settings.put({ key: 'supabasePasswordEnc', value: await _encryptPwd(_oldPwd) }); await db.settings.delete('supabasePassword'); } catch (e) {}
+      }
+    }
+
     // === REALTIME: nhận thông báo tức thời khi thiết bị khác tạo/sửa đơn ===
     try {
-      sb.channel('crm-realtime')
+      // Đóng channel cũ nếu còn (connect lại sau login/logout) -> tránh xử lý event N lần + leak
+      if (_realtimeChannel) { try { await sb.removeChannel(_realtimeChannel); } catch (e) {} _realtimeChannel = null; }
+      _realtimeChannel = sb.channel('crm-realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async (payload) => {
           if (pulling) return;
           const evt = payload.eventType;
           const data = payload.new || payload.old;
           const code = data?.order_code || '';
 
-          await pullAll(false);
+          debouncedRealtimePull();
 
           if (evt === 'INSERT') {
             showToast('📬 Có đơn hàng mới: ' + code, 'info');
@@ -488,7 +570,7 @@ async function connectSupabase(silent) {
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, async (payload) => {
           if (pulling) return;
-          await pullAll(false);
+          debouncedRealtimePull();
           const evt = payload.eventType;
           const data = payload.new || payload.old;
           const name = data?.name || '';
@@ -529,7 +611,12 @@ async function setupSupabase() {
   await db.settings.put({ key: 'supabaseUrl', value: url });
   await db.settings.put({ key: 'supabaseKey', value: key });
   await db.settings.put({ key: 'supabaseEmail', value: email });
-  await db.settings.put({ key: 'supabasePassword', value: password });
+  if (_sessionKey) {
+    await db.settings.put({ key: 'supabasePasswordEnc', value: await _encryptPwd(password) });
+    await db.settings.delete('supabasePassword');
+  } else {
+    await db.settings.put({ key: 'supabasePassword', value: password });
+  }
 
   showToast('Đang kết nối...', 'info');
   const ok = await connectSupabase(false);
@@ -543,8 +630,7 @@ async function setupSupabase() {
       if (!r.uuid) {
         r.uuid = genUUID();
         pulling++;
-        await db[tableName].update(r.id, { uuid: r.uuid });
-        pulling--;
+        try { await db[tableName].update(r.id, { uuid: r.uuid }); } finally { pulling--; }
         needsUpload = true;
       }
     }
@@ -595,9 +681,11 @@ window.forceSyncAll = forceSyncAll;
 
 async function disconnectSupabase() {
   showConfirm('Ngắt kết nối cloud? Dữ liệu trên cloud vẫn còn, app quay về chế độ local.', async () => {
-    for (const k of ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword']) {
+    for (const k of ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'supabasePasswordEnc']) {
       await db.settings.delete(k);
     }
+    if (_realtimeChannel && sb) { try { await sb.removeChannel(_realtimeChannel); } catch (e) {} }
+    _realtimeChannel = null;
     sbReady = false; sb = null;
     updateSyncStatus();
     showToast('Đã ngắt kết nối cloud', 'info');
@@ -648,12 +736,12 @@ window.addEventListener('online', async () => {
   updateSyncStatus();
   // Mạng vừa có lại -> mở khoá item từng "park" (có thể chỉ lỗi do mất mạng) để thử lại
   try { await db.outbox.toCollection().modify(i => { if (i.parked) { i.parked = 0; i.retries = 0; } }); } catch (e) {}
-  reconcile(); pullAll(false);
+  await pullAll(false); await reconcile();   // tuần tự: pull xong (pulling về 0) rồi mới reconcile
 });
 window.addEventListener('offline', updateSyncStatus);
-// Khi quay lại app (mở tab/khoá màn hình điện thoại) -> reconcile để đẩy nốt thứ còn kẹt
-document.addEventListener('visibilitychange', () => { if (!document.hidden && sbReady) { reconcile(); pullAll(false); } });
-setInterval(() => { if (sbReady) { processOutbox(); pullAll(false); } }, 30000);
+// Khi quay lại app (mở tab/khoá màn hình điện thoại) -> pull rồi reconcile để đẩy nốt thứ còn kẹt
+document.addEventListener('visibilitychange', async () => { if (!document.hidden && sbReady) { await pullAll(false); await reconcile(); } });
+setInterval(async () => { if (sbReady) { await processOutbox(); await pullAll(false); } }, 30000);
 // Reconcile định kỳ (3 phút): lưới an toàn đảm bảo không record nào kẹt lại local
 setInterval(() => { if (sbReady) reconcile(); }, 180000);
 
