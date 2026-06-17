@@ -69,8 +69,10 @@ Realtime → Supabase postgres_changes → pullAll() → Toast notification
 
 ### Lưu ý bảo mật
 - Supabase anon key là PUBLIC KEY, an toàn để commit (Supabase thiết kế như vậy)
-- Mật khẩu CRM lưu plaintext trong IndexedDB (chưa hash — Kaizen tương lai)
+- Mật khẩu CRM lưu **dạng hash SHA-256** trong IndexedDB (không phải plaintext)
 - Service Worker đã bị VÔ HIỆU HÓA (sw.js chỉ để tương thích cũ)
+- **Ảnh chuyển khoản (payment_proofs): bucket PRIVATE** — `payment_proof` lưu PATH (không phải URL), xem qua signed URL tạm 1h (`window.getSignedProofUrl` ở sync.js). Đổi private cần chạy lại `supabase-setup.sql` trên Supabase (đã idempotent: ép `public=false` + drop policy `pp_public_read`).
+- **File backup KHÔNG còn chứa secret**: `exportAllData()` loại `password`/`supabaseEmail`/`supabasePassword(Enc)`. Giữ `supabaseUrl`+`supabaseKey` (public). Restore máy mới → tự nối cloud nhưng phải nhập lại email/mật khẩu Supabase + đặt lại mật khẩu app.
 
 ## 5. DATABASE SCHEMA
 

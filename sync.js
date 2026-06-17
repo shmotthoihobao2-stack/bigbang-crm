@@ -727,9 +727,23 @@ window.uploadPaymentProofToSupabase = async function(file, orderCode) {
   });
   
   if (error) throw error;
-  
-  const { data: { publicUrl } } = sb.storage.from('payment_proofs').getPublicUrl(fileName);
-  return publicUrl;
+
+  // Bucket payment_proofs giờ là PRIVATE -> KHÔNG dùng getPublicUrl nữa.
+  // Lưu PATH (fileName) thay vì full URL; lúc xem mới sinh signed URL tạm.
+  return fileName;
+};
+
+// Sinh signed URL tạm (1h) để xem ảnh chuyển khoản từ bucket private.
+// Nuốt cả 2 dạng giá trị payment_proof: path MỚI ("BB-0001_123.jpg") lẫn full-URL CŨ (data legacy).
+window.getSignedProofUrl = async function(stored) {
+  if (!stored || !sb) return null;
+  const path = stored.includes('/payment_proofs/')
+    ? stored.split('/payment_proofs/')[1].split('?')[0]
+    : stored;
+  try {
+    const { data, error } = await sb.storage.from('payment_proofs').createSignedUrl(path, 3600);
+    return error ? null : data.signedUrl;
+  } catch (e) { return null; }
 };
 
 window.addEventListener('online', async () => {

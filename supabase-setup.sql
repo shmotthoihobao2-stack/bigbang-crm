@@ -183,13 +183,16 @@ begin
   end loop;
 end $$;
 
--- ===== STORAGE: bucket ảnh ủy nhiệm chi (idempotent) =====
+-- ===== STORAGE: bucket ảnh ủy nhiệm chi — PRIVATE (idempotent) =====
 -- Thiếu bucket này thì tính năng upload ảnh bill sẽ lỗi.
+-- Ảnh bill chứa tên + STK + nội dung CK của khách => bucket PRIVATE, app sinh signed URL tạm khi xem.
 insert into storage.buckets (id, name, public)
-values ('payment_proofs', 'payment_proofs', true)
+values ('payment_proofs', 'payment_proofs', false)
 on conflict (id) do nothing;
+-- Nếu bucket đã tồn tại (setup cũ để public=true) -> ép về private.
+update storage.buckets set public = false where id = 'payment_proofs';
 
--- Quyền cho bucket: chủ shop (đăng nhập) toàn quyền; người lạ chỉ xem (bucket public để hiện ảnh trên bill).
+-- Quyền cho bucket: chỉ chủ shop (đăng nhập) toàn quyền. KHÔNG cho anon đọc nữa.
 do $$
 begin
   if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='pp_authenticated_all') then
@@ -197,11 +200,9 @@ begin
       for all to authenticated
       using (bucket_id = 'payment_proofs') with check (bucket_id = 'payment_proofs');
   end if;
-  if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname='pp_public_read') then
-    create policy "pp_public_read" on storage.objects
-      for select to anon using (bucket_id = 'payment_proofs');
-  end if;
 end $$;
+-- Gỡ policy cho phép người lạ (anon) đọc ảnh bill (setup cũ từng tạo).
+drop policy if exists "pp_public_read" on storage.objects;
 
 -- ===== CHỐNG TRÙNG MÃ ĐƠN: sequence cấp số NGUYÊN TỬ (idempotent) =====
 -- Thiếu phần này: 2 máy tạo đơn gần như cùng lúc sẽ đọc cùng MAX -> đẻ TRÙNG mã (BB-0042 x2).

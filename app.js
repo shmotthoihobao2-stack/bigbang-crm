@@ -702,11 +702,11 @@ async function handleUploadProof(e, orderId, orderCode) {
       throw new Error('Tính năng upload chưa sẵn sàng. Vui lòng F5 lại trang.');
     }
     
-    const publicUrl = await window.uploadPaymentProofToSupabase(file, orderCode);
-    
-    // Lưu vào IndexedDB
-    await db.orders.update(orderId, { 
-      payment_proof: publicUrl,
+    const proofPath = await window.uploadPaymentProofToSupabase(file, orderCode);
+
+    // Lưu PATH (bucket private) — lúc xem detail mới sinh signed URL tạm
+    await db.orders.update(orderId, {
+      payment_proof: proofPath,
       updated_at: new Date().toISOString()
     });
     
@@ -942,6 +942,9 @@ async function openDetailModal(orderId) {
   const showDayText = order.show_day === 'day1' ? '24/10' : (order.show_day === 'day2' ? '25/10' : 'Cả 2 ngày');
   const msgTemplate = `Quân chào bạn ${custName},\nQuân đã nhận được cọc ${formatVND(order.deposit_amount)} cho đơn vé ${order.quantity} x ${order.ticket_tier} ngày ${showDayText}.\nMã đơn của bạn là: ${order.order_code}.\nKhi nào có mã vé QR Quân sẽ báo bạn ngay nhé! Cám ơn bạn ạ!`;
 
+  // Bucket ảnh CK là private -> sinh signed URL tạm để xem (null nếu offline/chưa kết nối)
+  const proofUrl = order.payment_proof && window.getSignedProofUrl ? await window.getSignedProofUrl(order.payment_proof) : null;
+
   body.innerHTML = `
     <div style="margin-bottom:var(--space-md)">
       <span class="order-status" data-status="${order.status}" style="font-size:0.8rem">${order.status.toUpperCase()}</span>
@@ -991,7 +994,7 @@ async function openDetailModal(orderId) {
     <div class="card" style="margin-bottom:var(--space-md)">
       <div class="card-header"><span class="card-title">📸 Ủy nhiệm chi (Bill)</span></div>
       <div class="order-info" style="text-align:center">
-        ${order.payment_proof ? `<a href="${esc(order.payment_proof)}" target="_blank" rel="noopener"><img src="${esc(order.payment_proof)}" style="max-width:100%;max-height:150px;border-radius:8px;margin-bottom:8px;object-fit:contain;background:rgba(0,0,0,0.2)"></a>` : '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:8px">Chưa có ảnh Ủy nhiệm chi</p>'}
+        ${proofUrl ? `<a href="${esc(proofUrl)}" target="_blank" rel="noopener"><img src="${esc(proofUrl)}" style="max-width:100%;max-height:150px;border-radius:8px;margin-bottom:8px;object-fit:contain;background:rgba(0,0,0,0.2)"></a>` : (order.payment_proof ? '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:8px">🔒 Ảnh chỉ xem được khi online</p>' : '<p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:8px">Chưa có ảnh Ủy nhiệm chi</p>')}
         <div>
           <button class="btn btn-secondary" style="font-size:0.75rem;padding:6px 12px" onclick="document.getElementById('upload-proof-${order.id}').click()">
             ${order.payment_proof ? 'Thay ảnh khác' : 'Tải ảnh lên'}
@@ -2035,13 +2038,19 @@ async function exportCSV() {
 
 // ===== BACKUP / RESTORE =====
 async function exportAllData() {
+  // Loại secret thật khỏi file backup (backup hay được chia sẻ qua Zalo/email để chuyển máy).
+  // Khác mục đích với SETTINGS_NO_SYNC bên sync.js (loại vì per-device); ở đây loại vì BẢO MẬT.
+  // GIỮ supabaseUrl + supabaseKey (anon key vốn public) -> máy mới restore tự nối lại cloud,
+  // chỉ cần nhập lại email/mật khẩu đăng nhập Supabase + đặt lại mật khẩu app.
+  const SECRET_KEYS = ['password', 'supabasePassword', 'supabasePasswordEnc', 'supabaseEmail'];
+  const settings = (await db.settings.toArray()).filter(s => !SECRET_KEYS.includes(s.key));
   const data = {
     version: 1,
     exportedAt: new Date().toISOString(),
     customers: await db.customers.toArray(),
     orders: await db.orders.toArray(),
     inventory: await db.inventory.toArray(),
-    settings: await db.settings.toArray(),
+    settings,
     resales: await db.resales.toArray(),
   };
 
