@@ -1629,7 +1629,7 @@ async function refreshDashboard() {
 }
 
 function renderCharts(orders) {
-  const activeOrders = orders.filter(o => o.status !== 'hủy' && o.status !== 'hoàn cọc');
+  const activeOrders = orders.filter(o => o.status !== 'hủy' && o.status !== 'hoàn cọc' && !o.deleted_at);
 
   // Chart 1: Revenue by date
   const dateMap = {};
