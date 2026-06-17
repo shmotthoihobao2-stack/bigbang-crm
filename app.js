@@ -110,6 +110,7 @@ async function handleLogin() {
 }
 
 function handleLogout() {
+  stopCountdownAutoRefresh();
   localStorage.removeItem('bb_logged_in');
   localStorage.removeItem('bb_pwd_hash');
   if (window.clearSessionKey) window.clearSessionKey();
@@ -248,7 +249,7 @@ async function renderCTVs() {
     container.innerHTML = '<p class="text-muted" style="font-size:0.85rem">Chưa có CTV nào</p>';
   } else {
     container.innerHTML = ctvs.map(name => {
-      const ctvOrders = orders.filter(o => o.ctv === name && o.status !== 'hủy');
+      const ctvOrders = orders.filter(o => o.ctv === name && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
       const ctvRevenue = ctvOrders.reduce((sum, o) => sum + (o.total || 0), 0);
       return `
         <div class="ctv-card">
@@ -504,7 +505,7 @@ async function lookupCustomer(phone) {
       
       if (validOrders.length > 0) {
         const totalAmount = validOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-        badge.innerHTML = `<span class="autofill-badge" style="background:var(--accent-gold);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;margin-left:8px;font-size:0.75rem;">🌟 VIP: ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
+        badge.innerHTML = `<span class="autofill-badge" style="background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;margin-left:8px;font-size:0.75rem;">🌟 VIP: ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
       } else {
         badge.innerHTML = '<span class="autofill-badge">✓ Khách cũ</span>';
       }
@@ -594,10 +595,15 @@ async function suggestCostPrice() {
   const day = document.getElementById('order-day').value;
   const tier = document.getElementById('order-tier').value;
   if (!day || !tier) return;
-  const firstDay = day === 'both' ? 'day1' : day;
-  const inv = await db.inventory.where({ show_day: firstDay, ticket_tier: tier }).first();
-  if (inv && inv.cost_price > 0) {
-    costEl.value = new Intl.NumberFormat('vi-VN').format(inv.cost_price);
+  // 'Cả 2 ngày' = 2 vé riêng → vốn = vốn Day1 + vốn Day2 (khớp cách tính lợi nhuận)
+  const days = day === 'both' ? ['day1', 'day2'] : [day];
+  let cost = 0;
+  for (const d of days) {
+    const inv = await db.inventory.where({ show_day: d, ticket_tier: tier }).first();
+    if (inv && inv.cost_price > 0) cost += inv.cost_price;
+  }
+  if (cost > 0) {
+    costEl.value = new Intl.NumberFormat('vi-VN').format(cost);
   }
 }
 // Auto-suggest nguồn vé từ các đơn cũ
@@ -928,7 +934,7 @@ async function openDetailModal(orderId) {
     const validOrders = custOrders.filter(o => !o.deleted_at && o.status !== 'hủy');
     if (validOrders.length > 0) {
       const totalAmount = validOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-      vipHtml = `<br><span style="display:inline-block;margin-top:4px;background:var(--accent-gold);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;font-size:0.75rem;">🌟 Lịch sử: Đã mua ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
+      vipHtml = `<br><span style="display:inline-block;margin-top:4px;background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;font-size:0.75rem;">🌟 Lịch sử: Đã mua ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
     }
   }
 
@@ -1061,7 +1067,7 @@ async function showOrderHistory(uuid, orderId) {
     </div>`;
   }).join('');
   body.insertAdjacentHTML('afterbegin',
-    `<div id="order-history-panel" class="card" style="margin-bottom:var(--space-md);border:1px solid var(--accent-gold)">
+    `<div id="order-history-panel" class="card" style="margin-bottom:var(--space-md);border:1px solid var(--gold-primary)">
        <div class="card-header"><span class="card-title">🕘 Lịch sử thay đổi (${rows.length})</span>
          <button class="btn btn-sm btn-secondary" style="font-size:0.7rem" onclick="document.getElementById('order-history-panel').remove()">Đóng</button>
        </div>
@@ -1354,7 +1360,7 @@ async function refreshInventory() {
       // Lấy danh sách ghế đã bán cho hạng này
       const activeOrders = await db.orders.where('ticket_tier').equals(tier).toArray();
       const seatList = activeOrders
-        .filter(o => ACTIVE_STATUSES.includes(o.status) && o.seat_number && (o.show_day === day || o.show_day === 'both'))
+        .filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && o.seat_number && (o.show_day === day || o.show_day === 'both'))
         .map(o => o.seat_number)
         .filter(s => s.trim());
       const seatHTML = seatList.length > 0
@@ -2442,7 +2448,7 @@ async function saveResale(e) {
   if (!day) { showToast('Vui lòng chọn ngày diễn', 'error'); return; }
   if (!tier) { showToast('Vui lòng chọn hạng vé', 'error'); return; }
   if (asking <= 0) { showToast('Vui lòng nhập giá rao pass', 'error'); return; }
-  if (fee > asking) { showToast('Phí dịch vụ lớn hơn giá rao!', 'error'); return; }
+  if (fee >= asking) { showToast('Phí dịch vụ phải nhỏ hơn giá rao (khách phải nhận được tiền)', 'error'); return; }
 
   let orderCode = '';
   if (orderId) {
@@ -2624,8 +2630,9 @@ function copyScript(id) {
 // ===== TOAST =====
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
-  // Giới hạn 3 toast cùng lúc — tránh spam khi bulk action/sync lỗi
-  if (container.querySelectorAll('.toast').length >= 3) return;
+  // Giới hạn 3 toast cùng lúc — tránh spam khi bulk action/sync lỗi.
+  // Toast lỗi luôn được hiện (không bị chặn) vì là thông báo quan trọng.
+  if (type !== 'error' && container.querySelectorAll('.toast').length >= 3) return;
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
 
