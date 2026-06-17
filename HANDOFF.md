@@ -1,5 +1,5 @@
 # 🤖 BÀN GIAO DỰ ÁN — BigBang CRM
-> Cập nhật lần cuối: 13/06/2026 23:10 ICT
+> Cập nhật lần cuối: 17/06/2026 ICT
 > Tài liệu này dành cho AGENT MỚI tiếp nhận dự án. Đọc KỸ trước khi làm bất kỳ gì.
 
 ---
@@ -30,9 +30,9 @@
 Kiến trúc: Static SPA (không có build step)
 ────────────────────────────────────────────
 index.html  ← SPA layout (6 tabs + modals)
-app.js      ← Logic CRUD, UI (~2400 dòng)
-sync.js     ← Đồng bộ Supabase (~540 dòng)
-style.css   ← UI dark theme (~1100 dòng)
+app.js      ← Logic CRUD, UI (~2690 dòng)
+sync.js     ← Đồng bộ Supabase (~780 dòng)
+style.css   ← UI dark theme (~1765 dòng)
 tracuu.html ← Trang tra cứu đơn công khai
 ```
 
@@ -122,6 +122,8 @@ db.version(4).stores({
 | 13/06 | Kaizen 3.5 | Thêm trường email |
 | 13/06 | Kaizen 4 | Gửi vé qua email (EmailJS) |
 | 13/06 | Hotfix | Fix Dexie schema conflict, hardcode credentials, tách repo, chuyển GitHub Pages |
+| 15-17/06 | Round 1 | Tồn kho ∞ (không ôm vé), giá vốn theo từng đơn, nút pass vé nhanh, fix autofill SĐT ký gửi, Script nhắn khách |
+| 17/06 | Round 2 | Fix resale thiếu uuid, CSS --bg-elevated, confirm hủy/hoàn cọc, real-time cọc>tổng, countdown auto-refresh, toast max 3, filter reset |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 

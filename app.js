@@ -318,8 +318,9 @@ function switchTab(tab) {
   fab.style.display = (tab === 'orders' || tab === 'dashboard') ? 'flex' : 'none';
 
   // Refresh data on tab switch
-  if (tab === 'dashboard') refreshDashboard();
-  if (tab === 'orders') refreshOrders();
+  if (tab === 'dashboard') { refreshDashboard(); startCountdownAutoRefresh(); }
+  else stopCountdownAutoRefresh();
+  if (tab === 'orders') { setStatusFilter('all'); refreshOrders(); }
   if (tab === 'inventory') refreshInventory();
   if (tab === 'followup') refreshFollowup();
   if (tab === 'resale') refreshResales();
@@ -517,6 +518,21 @@ function calcTotal() {
   const price = parseVND(document.getElementById('order-price').value);
   const total = qty * price;
   document.getElementById('order-total').value = formatVND(total);
+  checkDepositLimit();
+}
+
+function checkDepositLimit() {
+  const deposit = parseVND(document.getElementById('order-deposit')?.value);
+  const total = parseVND(document.getElementById('order-total')?.value);
+  const warnEl = document.getElementById('deposit-warning');
+  const txtEl = document.getElementById('deposit-warning-text');
+  if (!warnEl) return;
+  if (deposit > 0 && total > 0 && deposit > total) {
+    txtEl.textContent = `Tiền cọc (${formatVND(deposit)}) vượt tổng tiền (${formatVND(total)})!`;
+    warnEl.classList.remove('hidden');
+  } else {
+    warnEl.classList.add('hidden');
+  }
 }
 
 // ===== CHECK INVENTORY WARNING =====
@@ -1166,13 +1182,22 @@ async function emptyTrash() {
 }
 
 async function changeOrderStatus(orderId, newStatus) {
-  await db.orders.update(orderId, {
-    status: newStatus,
-    updated_at: new Date().toISOString()
-  });
-  showToast(`Đã đổi trạng thái → ${newStatus}`, 'success');
-  closeDetailModal();
-  await refreshAll();
+  const doChange = async () => {
+    await db.orders.update(orderId, {
+      status: newStatus,
+      updated_at: new Date().toISOString()
+    });
+    showToast(`Đã đổi trạng thái → ${newStatus}`, 'success');
+    closeDetailModal();
+    await refreshAll();
+  };
+  // Trạng thái nguy hiểm: yêu cầu xác nhận trước khi đổi
+  if (newStatus === 'hủy' || newStatus === 'hoàn cọc') {
+    const label = newStatus === 'hủy' ? 'HỦY đơn' : 'HOÀN CỌC';
+    showConfirm(`Xác nhận ${label}?\nThao tác này có thể ảnh hưởng doanh thu và tồn kho.`, doChange);
+  } else {
+    await doChange();
+  }
 }
 
 // ===== ORDERS LIST =====
@@ -2026,6 +2051,15 @@ async function exportAllData() {
 }
 
 // ===== ĐẾM NGƯỢC CONCERT =====
+let _countdownInterval = null;
+function startCountdownAutoRefresh() {
+  if (_countdownInterval) clearInterval(_countdownInterval);
+  _countdownInterval = setInterval(renderCountdown, 60_000);
+}
+function stopCountdownAutoRefresh() {
+  if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null; }
+}
+
 function renderCountdown() {
   const el = document.getElementById('countdown-banner');
   if (!el) return;
@@ -2427,6 +2461,7 @@ async function saveResale(e) {
     showToast('Đã cập nhật ký gửi!', 'success');
   } else {
     await db.resales.add({
+      uuid: genUUID(),
       order_id: orderId, order_code: orderCode, customer_name: name, customer_phone: phone,
       show_day: day, ticket_tier: tier, quantity: qty,
       original_price: originalPrice, asking_price: asking, service_fee: fee,
@@ -2589,6 +2624,8 @@ function copyScript(id) {
 // ===== TOAST =====
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
+  // Giới hạn 3 toast cùng lúc — tránh spam khi bulk action/sync lỗi
+  if (container.querySelectorAll('.toast').length >= 3) return;
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
 

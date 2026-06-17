@@ -667,7 +667,11 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <!-- Deposit -->
         <div class="form-group">
           <label class="form-label">Tiền cọc</label>
-          <input type="text" class="form-input" id="order-deposit" placeholder="0" inputmode="numeric" oninput="formatMoneyInput(this)">
+          <input type="text" class="form-input" id="order-deposit" placeholder="0" inputmode="numeric" oninput="formatMoneyInput(this);checkDepositLimit()">
+          <div id="deposit-warning" class="overstock-warning hidden" style="margin-top:4px">
+            <span class="warn-icon">⚠️</span>
+            <span class="warn-text" id="deposit-warning-text">Tiền cọc vượt quá tổng tiền!</span>
+          </div>
         </div>
 
         <!-- Status -->
