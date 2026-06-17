@@ -126,6 +126,8 @@ db.version(4).stores({
 | 13/06 | Hotfix | Fix Dexie schema conflict, hardcode credentials, tách repo, chuyển GitHub Pages |
 | 15-17/06 | Round 1 | Tồn kho ∞ (không ôm vé), giá vốn theo từng đơn, nút pass vé nhanh, fix autofill SĐT ký gửi, Script nhắn khách |
 | 17/06 | Round 2 | Fix resale thiếu uuid, CSS --bg-elevated, confirm hủy/hoàn cọc, real-time cọc>tổng, countdown auto-refresh, toast max 3, filter reset |
+| 17/06 | Round 3 | --accent-gold undefined, CTV doanh thu đếm sai, tồn kho ghế soft-delete, interval logout, giá vốn 2 ngày, toast lỗi bị chặn |
+| 17/06 | Round 4 | Bảo mật: bucket payment_proofs PUBLIC→PRIVATE + signed URL; backup redact secret (không còn hash pw/email Supabase) |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 
