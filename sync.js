@@ -195,7 +195,7 @@ async function toCloud(tableName, rec) {
     return {
       uuid: rec.uuid, order_code: rec.order_code, customer_uuid: customerUuid,
       show_day: rec.show_day, ticket_tier: rec.ticket_tier, quantity: rec.quantity || 0,
-      unit_price: rec.unit_price || 0, total: rec.total || 0, deposit_amount: rec.deposit_amount || 0,
+      unit_price: rec.unit_price || 0, cost_price: rec.cost_price || 0, total: rec.total || 0, deposit_amount: rec.deposit_amount || 0,
       status: rec.status, delivery_method: rec.delivery_method || '', ctv: rec.ctv || '',
       seat_number: rec.seat_number || '',
       ticket_source: rec.ticket_source || '',
@@ -404,7 +404,7 @@ async function pullAll(showResult) {
       const fields = {
         order_code: co.order_code, customer_id: uuidToLocalId[co.customer_uuid] || (local ? local.customer_id : null),
         show_day: co.show_day, ticket_tier: co.ticket_tier, quantity: co.quantity,
-        unit_price: co.unit_price, total: co.total, deposit_amount: co.deposit_amount,
+        unit_price: co.unit_price, cost_price: co.cost_price || 0, total: co.total, deposit_amount: co.deposit_amount,
         status: co.status, delivery_method: co.delivery_method, ctv: co.ctv, seat_number: co.seat_number || '', ticket_source: co.ticket_source || '', combo_info: co.combo_info || '', payment_proof: co.payment_proof || '', note: co.note,
         created_at: co.created_at, updated_at: co.updated_at
       };

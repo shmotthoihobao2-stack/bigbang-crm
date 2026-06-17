@@ -600,7 +600,7 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <!-- Show Day -->
         <div class="form-group">
           <label class="form-label">Ngày diễn</label>
-          <select class="form-select" id="order-day" required onchange="checkInventory()">
+          <select class="form-select" id="order-day" required onchange="checkInventory();suggestCostPrice()">
             <option value="">-- Chọn ngày --</option>
             <option value="day1">Day 1 — 24/10/2026</option>
             <option value="day2">Day 2 — 25/10/2026</option>
@@ -611,7 +611,7 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <!-- Ticket Tier -->
         <div class="form-group">
           <label class="form-label">Hạng vé</label>
-          <select class="form-select" id="order-tier" required onchange="checkInventory()">
+          <select class="form-select" id="order-tier" required onchange="checkInventory();suggestCostPrice()">
             <option value="">-- Chọn hạng --</option>
             <!-- Dynamically populated -->
           </select>
@@ -627,6 +627,14 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
             <label class="form-label">Đơn giá (VNĐ)</label>
             <input type="text" class="form-input" id="order-price" placeholder="0" oninput="formatMoneyInput(this)" inputmode="numeric">
           </div>
+        </div>
+
+        <!-- Giá nhập / vốn (theo từng đơn) -->
+        <div class="form-group">
+          <label class="form-label">Giá nhập / vốn (1 vé)</label>
+          <input type="text" class="form-input" id="order-cost" placeholder="0" inputmode="numeric"
+                 oninput="this.value = parseVND(this.value) ? new Intl.NumberFormat('vi-VN').format(parseVND(this.value)) : ''">
+          <div class="form-hint">Giá đặt vé lần này (để tính lãi đúng từng đơn). Tự gợi ý từ Tồn kho nếu có.</div>
         </div>
 
         <!-- Inventory warning -->
@@ -778,7 +786,7 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
           </div>
           <div class="form-group">
             <label class="form-label">SĐT</label>
-            <input type="tel" class="form-input" id="resale-phone" placeholder="0xxx xxx xxx" maxlength="11">
+            <input type="tel" class="form-input" id="resale-phone" placeholder="0xxx xxx xxx" maxlength="11" oninput="lookupResaleCustomer(this.value)">
           </div>
         </div>
 

@@ -540,7 +540,8 @@ async function checkInventory() {
 
   for (const d of days) {
     const inv = await db.inventory.where({ show_day: d, ticket_tier: tier }).first();
-    if (inv) {
+    // Không ôm vé: hạng để trống/0 = không giới hạn → bỏ qua cảnh báo
+    if (inv && inv.total_stock > 0) {
       let sold = await countSold(d, tier);
       if (editingOrder && editingOrder.ticket_tier === tier && ACTIVE_STATUSES.includes(editingOrder.status)
           && (editingOrder.show_day === d || editingOrder.show_day === 'both')) {
@@ -568,6 +569,20 @@ async function countSold(showDay, tier) {
   return orders
     .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at)
     .reduce((sum, o) => sum + (o.quantity || 0), 0);
+}
+
+// Gợi ý giá nhập từ Tồn kho (chỉ điền khi ô đang trống, không đè giá user gõ tay)
+async function suggestCostPrice() {
+  const costEl = document.getElementById('order-cost');
+  if (!costEl || costEl.value.trim()) return;
+  const day = document.getElementById('order-day').value;
+  const tier = document.getElementById('order-tier').value;
+  if (!day || !tier) return;
+  const firstDay = day === 'both' ? 'day1' : day;
+  const inv = await db.inventory.where({ show_day: firstDay, ticket_tier: tier }).first();
+  if (inv && inv.cost_price > 0) {
+    costEl.value = new Intl.NumberFormat('vi-VN').format(inv.cost_price);
+  }
 }
 // Auto-suggest nguồn vé từ các đơn cũ
 async function populateTicketSourceList() {
@@ -636,6 +651,7 @@ async function loadOrderForEdit(orderId) {
 
   document.getElementById('order-qty').value = order.quantity;
   document.getElementById('order-price').value = order.unit_price ? new Intl.NumberFormat('vi-VN').format(order.unit_price) : '';
+  document.getElementById('order-cost').value = order.cost_price ? new Intl.NumberFormat('vi-VN').format(order.cost_price) : '';
   document.getElementById('order-total').value = formatVND(order.total);
   document.getElementById('order-deposit').value = order.deposit_amount ? new Intl.NumberFormat('vi-VN').format(order.deposit_amount) : '';
   document.getElementById('order-status').value = order.status;
@@ -758,6 +774,7 @@ async function saveOrder(e) {
   const tier = document.getElementById('order-tier').value;
   const qty = parseInt(document.getElementById('order-qty').value) || 1;
   const unitPrice = parseVND(document.getElementById('order-price').value);
+  const costPrice = parseVND(document.getElementById('order-cost').value);
   const deposit = parseVND(document.getElementById('order-deposit').value);
   const status = document.getElementById('order-status').value;
   const delivery = document.getElementById('order-delivery').value;
@@ -827,6 +844,7 @@ async function saveOrder(e) {
       ticket_tier: tier,
       quantity: qty,
       unit_price: unitPrice,
+      cost_price: costPrice,
       total,
       deposit_amount: deposit,
       status,
@@ -850,6 +868,7 @@ async function saveOrder(e) {
       ticket_tier: tier,
       quantity: qty,
       unit_price: unitPrice,
+      cost_price: costPrice,
       total,
       deposit_amount: deposit,
       status,
@@ -978,15 +997,21 @@ async function openDetailModal(orderId) {
     ? `<button class="btn btn-danger" onclick="deleteOrder(${orderId})">🗑️ Xóa</button>` 
     : '';
 
-  const emailBtn = (customer && customer.email) 
-    ? `<button class="btn btn-primary" onclick="sendTicketEmail(${orderId})" style="background:linear-gradient(135deg,#667eea,#764ba2)">📧 Gửi vé Email</button>` 
+  const emailBtn = (customer && customer.email)
+    ? `<button class="btn btn-primary" onclick="sendTicketEmail(${orderId})" style="background:linear-gradient(135deg,#667eea,#764ba2)">📧 Gửi vé Email</button>`
     : `<button class="btn btn-secondary" onclick="showToast('Khách chưa có email. Sửa đơn để thêm email.','error')" style="opacity:0.5">📧 Chưa có email</button>`;
+
+  // Nút nhờ pass: chỉ đơn từ "đã cọc" trở lên (đã có gì để pass)
+  const passBtn = ACTIVE_STATUSES.includes(order.status)
+    ? `<button class="btn btn-secondary" onclick="passOrder(${orderId})">🔁 Nhờ pass vé này</button>`
+    : '';
 
   actions.innerHTML = `
     <button class="btn btn-secondary" onclick="closeDetailModal()">Đóng</button>
     <button class="btn btn-secondary" onclick="closeDetailModal();openOrderModal(${orderId})">✏️ Sửa</button>
     <button class="btn btn-gold" onclick="generateBill(${orderId})">📃 Bill</button>
     ${emailBtn}
+    ${passBtn}
     <button class="btn btn-secondary" onclick="showOrderHistory('${order.uuid || ''}', ${orderId})">🕘 Lịch sử</button>
     ${deleteBtn}
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px;width:100%">
@@ -1292,8 +1317,10 @@ async function refreshInventory() {
       const remaining = totalStock - sold;
       const costPrice = inv ? inv.cost_price : 0;
 
-      const isDanger = remaining <= 0 && totalStock > 0;
-      const isWarning = remaining < 0;
+      // Không ôm vé: tổng để trống/0 = không giới hạn → không cảnh báo
+      const unlimited = !totalStock || totalStock <= 0;
+      const isDanger = !unlimited && remaining <= 0;
+      const isWarning = !unlimited && remaining < 0;
 
       if (isWarning) {
         warnings.push(`${showDayLabel(day)} — ${tier}: Bán vượt ${Math.abs(remaining)} vé!`);
@@ -1319,7 +1346,7 @@ async function refreshInventory() {
             ${costPrice ? '<span class="inventory-day-label">Giá nhập: ' + formatVND(costPrice) + '</span>' : ''}
           </div>
           <div>
-            <span class="inventory-number">${totalStock}</span>
+            <span class="inventory-number">${unlimited ? '∞' : totalStock}</span>
             <span class="inventory-sub">tổng</span>
           </div>
           <div>
@@ -1327,7 +1354,7 @@ async function refreshInventory() {
             <span class="inventory-sub">đã bán</span>
           </div>
           <div>
-            <span class="inventory-number ${isDanger ? 'danger' : 'remaining'}">${remaining}</span>
+            <span class="inventory-number ${isDanger ? 'danger' : 'remaining'}">${unlimited ? '∞' : remaining}</span>
             <span class="inventory-sub">còn lại</span>
           </div>
           ${seatHTML}
@@ -1372,11 +1399,11 @@ async function openInventoryModal() {
       html += `
         <div class="form-row" style="margin-bottom:var(--space-sm)">
           <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">${esc(tier)} — Tổng vé</label>
-            <input type="number" class="form-input inv-stock" data-day="${day}" data-tier="${esc(tier)}" value="${totalStock}" min="0">
+            <label class="form-label">${esc(tier)} — Tổng vé (trống = ∞)</label>
+            <input type="number" class="form-input inv-stock" data-day="${day}" data-tier="${esc(tier)}" value="${totalStock || ''}" min="0" placeholder="∞ không giới hạn">
           </div>
           <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">${esc(tier)} — Giá nhập</label>
+            <label class="form-label">${esc(tier)} — Giá nhập gợi ý</label>
             <input type="text" class="form-input inv-cost" data-day="${day}" data-tier="${esc(tier)}" value="${costPrice ? new Intl.NumberFormat('vi-VN').format(costPrice) : ''}" placeholder="0" inputmode="numeric" oninput="this.value = parseVND(this.value) ? new Intl.NumberFormat('vi-VN').format(parseVND(this.value)) : ''">
           </div>
         </div>
@@ -1530,9 +1557,14 @@ async function refreshDashboard() {
   }, 0);
   const totalRemaining = totalRevenue - totalReceived;
 
-  // Chi phí vốn: đơn 'cả 2 ngày' = vé Day1 + vé Day2 (đúng cả giá nhập từng ngày)
+  // Chi phí vốn: ưu tiên giá vốn ghi TRÊN ĐƠN (chính xác từng lần đặt).
+  // Đơn cũ chưa có cost_price → fallback giá nhập gợi ý ở Tồn kho (đơn 'cả 2 ngày' = vốn Day1 + Day2).
   let totalCost = 0;
   for (const order of confirmedOrders) {
+    if (order.cost_price > 0) {
+      totalCost += order.cost_price * (order.quantity || 0);
+      continue;
+    }
     const days = order.show_day === 'both' ? ['day1', 'day2'] : [order.show_day];
     for (const d of days) {
       const inv = await db.inventory.where({ show_day: d, ticket_tier: order.ticket_tier }).first();
@@ -2272,11 +2304,11 @@ async function openResaleModal() {
   document.getElementById('edit-resale-id').value = '';
   document.getElementById('resale-refund-preview').textContent = '';
 
-  // Dropdown đơn gốc: chỉ đơn đã TT đủ / đã giao (vé đã thuộc về khách)
+  // Dropdown đơn gốc: từ "đã cọc" trở lên (khách có thể đổi ý nhờ pass sớm)
   const orders = await db.orders.toArray();
   const customers = await db.customers.toArray();
   const cmap = toMap(customers);
-  const eligible = orders.filter(o => o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé');
+  const eligible = orders.filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
   const select = document.getElementById('resale-order');
   select.innerHTML = '<option value="">— Khách ngoài / nhập tay —</option>' +
     eligible.map(o => {
@@ -2290,6 +2322,41 @@ async function openResaleModal() {
 
 function closeResaleModal() {
   document.getElementById('resale-modal').classList.remove('active');
+}
+
+// Từ chi tiết đơn → mở ký gửi pass với đơn này điền sẵn
+async function passOrder(orderId) {
+  closeDetailModal();
+  await openResaleModal();
+  document.getElementById('resale-order').value = String(orderId);
+  await resaleOrderPicked();
+  showToast('Đã điền sẵn vé từ đơn — nhập giá rao pass & phí dịch vụ', 'info');
+}
+
+// Gõ SĐT khách cũ trong form ký gửi → tự điền tên + chọn đơn pass-được gần nhất
+let resaleLookupTimeout;
+async function lookupResaleCustomer(phone) {
+  clearTimeout(resaleLookupTimeout);
+  const cleaned = phone.replace(/[\s\-\.]/g, '');
+  if (cleaned.length < 5) return;
+  resaleLookupTimeout = setTimeout(async () => {
+    const customer = await db.customers.where('phone').equals(cleaned).first();
+    if (!customer) return;
+    const nameEl = document.getElementById('resale-name');
+    if (nameEl && !nameEl.value.trim()) nameEl.value = customer.name || '';
+    // Tìm đơn pass-được gần nhất của khách → tự chọn đơn gốc + autofill vé
+    const orders = await db.orders.where('customer_id').equals(customer.id).toArray();
+    const eligible = orders
+      .filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at)
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    if (eligible.length) {
+      const sel = document.getElementById('resale-order');
+      if (sel && sel.querySelector(`option[value="${eligible[0].id}"]`)) {
+        sel.value = String(eligible[0].id);
+        await resaleOrderPicked();
+      }
+    }
+  }, 300);
 }
 
 // Chọn đơn gốc -> autofill toàn bộ

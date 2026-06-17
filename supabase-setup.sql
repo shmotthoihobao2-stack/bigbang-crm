@@ -27,6 +27,7 @@ create table if not exists orders (
   ticket_tier text,
   quantity int,
   unit_price bigint,
+  cost_price bigint default 0,
   total bigint,
   deposit_amount bigint,
   status text,
@@ -41,6 +42,9 @@ create table if not exists orders (
   updated_at timestamptz default now(),
   deleted boolean default false
 );
+
+-- Migration: thêm cột giá vốn theo từng đơn cho DB đã tạo trước đó (an toàn chạy lại)
+alter table orders add column if not exists cost_price bigint default 0;
 
 create table if not exists inventory (
   uuid text primary key,
