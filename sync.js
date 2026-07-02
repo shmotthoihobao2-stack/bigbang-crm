@@ -173,6 +173,72 @@ function debouncedRealtimePull() {
   }, 800);
 }
 
+// ===== REALTIME: subscribe + TỰ NỐI LẠI khi channel chết =====
+// Trước đây chỉ subscribe 1 lần trong catch; channel chết (timeout/lỗi) là mất realtime âm thầm,
+// chỉ còn poll 30s. Giờ theo dõi status + re-subscribe backoff (2s -> cap 30s).
+let _realtimeAlive = false;
+let _rtRetryTimer = null;
+let _rtBackoff = 2000;
+let _rtGen = 0;   // generation: vô hiệu callback của channel cũ (chống re-subscribe loop khi removeChannel bắn CLOSED)
+
+async function subscribeRealtime() {
+  if (!sb || !sbReady) return;
+  clearTimeout(_rtRetryTimer);
+  const myGen = ++_rtGen;
+  // Đóng channel cũ nếu còn (connect lại sau login/logout) -> tránh xử lý event N lần + leak
+  if (_realtimeChannel) { try { await sb.removeChannel(_realtimeChannel); } catch (e) {} _realtimeChannel = null; }
+
+  _realtimeChannel = sb.channel('crm-realtime')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async (payload) => {
+      if (pulling) return;
+      const evt = payload.eventType;
+      const data = payload.new || payload.old;
+      const code = data?.order_code || '';
+      debouncedRealtimePull();
+      if (evt === 'INSERT') {
+        showToast('📬 Có đơn hàng mới: ' + code, 'info');
+      } else if (evt === 'UPDATE') {
+        showToast('🔄 Đơn ' + code + ' vừa được cập nhật', 'info');
+      }
+      if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('BigBang CRM', {
+          body: evt === 'INSERT' ? 'Đơn mới: ' + code : 'Cập nhật: ' + code,
+          icon: 'icon-192.png'
+        });
+      }
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, async (payload) => {
+      if (pulling) return;
+      debouncedRealtimePull();
+      const evt = payload.eventType;
+      const data = payload.new || payload.old;
+      const name = data?.name || '';
+      if (evt === 'UPDATE') {
+        showToast('👤 Thông tin khách ' + name + ' vừa được cập nhật', 'info');
+      }
+    })
+    .subscribe((status) => {
+      if (myGen !== _rtGen) return; // callback từ channel cũ (đã bị thay) -> bỏ qua
+      if (status === 'SUBSCRIBED') {
+        _realtimeAlive = true;
+        _rtBackoff = 2000; // nối lại thành công -> reset backoff
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        _realtimeAlive = false;
+        // Chỉ tự nối lại khi vẫn đang đăng nhập & online (tránh spin lúc logout/offline)
+        if (sbReady && navigator.onLine) {
+          clearTimeout(_rtRetryTimer);
+          _rtRetryTimer = setTimeout(subscribeRealtime, _rtBackoff);
+          _rtBackoff = Math.min(_rtBackoff * 2, 30000);
+        }
+      }
+    });
+
+  // Xin quyền notification (chỉ hỏi 1 lần)
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
 // ===== CHUYỂN ĐỔI RECORD LOCAL -> CLOUD =====
 async function toCloud(tableName, rec) {
   if (tableName === 'customers') {
@@ -542,48 +608,9 @@ async function connectSupabase(silent) {
       }
     }
 
-    // === REALTIME: nhận thông báo tức thời khi thiết bị khác tạo/sửa đơn ===
+    // === REALTIME: nhận thông báo tức thời + tự nối lại khi channel chết ===
     try {
-      // Đóng channel cũ nếu còn (connect lại sau login/logout) -> tránh xử lý event N lần + leak
-      if (_realtimeChannel) { try { await sb.removeChannel(_realtimeChannel); } catch (e) {} _realtimeChannel = null; }
-      _realtimeChannel = sb.channel('crm-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async (payload) => {
-          if (pulling) return;
-          const evt = payload.eventType;
-          const data = payload.new || payload.old;
-          const code = data?.order_code || '';
-
-          debouncedRealtimePull();
-
-          if (evt === 'INSERT') {
-            showToast('📬 Có đơn hàng mới: ' + code, 'info');
-          } else if (evt === 'UPDATE') {
-            showToast('🔄 Đơn ' + code + ' vừa được cập nhật', 'info');
-          }
-
-          if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification('BigBang CRM', {
-              body: evt === 'INSERT' ? 'Đơn mới: ' + code : 'Cập nhật: ' + code,
-              icon: 'icon-192.png'
-            });
-          }
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, async (payload) => {
-          if (pulling) return;
-          debouncedRealtimePull();
-          const evt = payload.eventType;
-          const data = payload.new || payload.old;
-          const name = data?.name || '';
-          if (evt === 'UPDATE') {
-            showToast('👤 Thông tin khách ' + name + ' vừa được cập nhật', 'info');
-          }
-        })
-        .subscribe();
-
-      // Xin quyền notification (chỉ hỏi 1 lần)
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
+      await subscribeRealtime();
     } catch (rtErr) {
       console.warn('Realtime subscription failed:', rtErr);
     }
@@ -608,6 +635,24 @@ async function setupSupabase() {
     showToast('Điền email và mật khẩu Supabase để kết nối', 'error');
     return;
   }
+  if (typeof supabase === 'undefined') {
+    showToast('Chưa tải được thư viện Supabase (kiểm tra mạng)', 'error');
+    return;
+  }
+
+  showToast('Đang kết nối...', 'info');
+  // VALIDATE TRƯỚC khi lưu: đăng nhập thử; sai -> KHÔNG ghi creds vào DB.
+  // (Trước đây lưu ngay -> nhập sai vẫn kẹt trong DB, mỗi lần mở app tự đăng nhập sai + lỗi im lặng.)
+  try {
+    const testClient = supabase.createClient(url, key);
+    const { error } = await testClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+  } catch (e) {
+    showToast('Đăng nhập Supabase thất bại: ' + (e.message || e) + ' — chưa lưu', 'error');
+    return;
+  }
+
+  // Xác thực OK -> giờ mới lưu creds
   await db.settings.put({ key: 'supabaseUrl', value: url });
   await db.settings.put({ key: 'supabaseKey', value: key });
   await db.settings.put({ key: 'supabaseEmail', value: email });
@@ -618,7 +663,6 @@ async function setupSupabase() {
     await db.settings.put({ key: 'supabasePassword', value: password });
   }
 
-  showToast('Đang kết nối...', 'info');
   const ok = await connectSupabase(false);
   if (!ok) return;
 
@@ -684,6 +728,7 @@ async function disconnectSupabase() {
     for (const k of ['supabaseUrl', 'supabaseKey', 'supabaseEmail', 'supabasePassword', 'supabasePasswordEnc']) {
       await db.settings.delete(k);
     }
+    clearTimeout(_rtRetryTimer); _realtimeAlive = false; _rtGen++;   // dừng + vô hiệu callback channel cũ
     if (_realtimeChannel && sb) { try { await sb.removeChannel(_realtimeChannel); } catch (e) {} }
     _realtimeChannel = null;
     sbReady = false; sb = null;
@@ -776,6 +821,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       // reconcile() tự backfill uuid + đảm bảo không record nào kẹt lại (thay cho backfill thủ công cũ).
       await pullAll(false);
       await reconcile();
+    } else if (email) {
+      // Đã có creds lưu nhưng kết nối load (silent) thất bại -> báo rõ, đừng để user tưởng đang sync.
+      showToast('Chưa kết nối được cloud — đang chạy chế độ offline (dữ liệu vẫn lưu, sẽ tự đẩy khi có mạng)', 'warning');
     }
   }, 300);
 

@@ -128,6 +128,7 @@ db.version(4).stores({
 | 17/06 | Round 2 | Fix resale thiếu uuid, CSS --bg-elevated, confirm hủy/hoàn cọc, real-time cọc>tổng, countdown auto-refresh, toast max 3, filter reset |
 | 17/06 | Round 3 | --accent-gold undefined, CTV doanh thu đếm sai, tồn kho ghế soft-delete, interval logout, giá vốn 2 ngày, toast lỗi bị chặn |
 | 17/06 | Round 4 | Bảo mật: bucket payment_proofs PUBLIC→PRIVATE + signed URL; backup redact secret (không còn hash pw/email Supabase) |
+| 02/07 | Round 5 | Audit Principal Architect (3 agent + verify chéo). Fix 7 việc — (P0) `lookup_order` guard null-phone+length (chống lộ đơn khách không SĐT); (P1) `refreshInventory` batch-load orders 1 lần thay ~20 query N+1; (P1) validate creds Supabase TRƯỚC khi lưu DB; (P2) realtime auto re-subscribe backoff + generation guard; (P2) toast khi load connect fail; (P3) `.catch()` populateCTVSelect; (P3) hint mật khẩu không nhúng HTML (JS chèn khi còn default). Bác 7 false-positive. **⚠️ Cần chạy lại `supabase-setup.sql` live cho P0.** |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 

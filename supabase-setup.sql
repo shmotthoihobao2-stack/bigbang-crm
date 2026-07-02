@@ -153,7 +153,11 @@ as $$
   from orders o
   left join customers c on c.uuid = o.customer_uuid
   where upper(trim(o.order_code)) = upper(trim(p_code))
-    and right(coalesce(c.phone, ''), 4) = right(trim(p_phone_last4), 4)
+    -- Ép chính hàm tự bảo vệ (không tin client): phải đủ 4 số cuối + khách PHẢI có SĐT.
+    -- Thiếu guard này: anon gọi RPC trực tiếp với last4='' -> khớp mọi khách phone NULL -> lộ đơn.
+    and length(trim(p_phone_last4)) = 4
+    and c.phone is not null and length(c.phone) >= 4
+    and right(c.phone, 4) = right(trim(p_phone_last4), 4)
     and o.deleted = false
   limit 1;
 $$;

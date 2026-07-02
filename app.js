@@ -69,11 +69,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await db.settings.put({ key: 'ctvList', value: JSON.stringify([]) });
   }
 
-  // Ẩn gợi ý mật khẩu mặc định nếu user đã đổi mật khẩu
+  // Gợi ý mật khẩu mặc định: CHỈ chèn + hiện khi pass vẫn là mặc định (lần đầu).
+  // Không nhúng sẵn chuỗi vào HTML -> không lộ mật khẩu trong view-source.
   const curPwd = await db.settings.get('password');
-  if (curPwd && curPwd.value !== await sha256(DEFAULT_PASSWORD)) {
-    const hint = document.getElementById('default-pwd-hint');
-    if (hint) hint.style.display = 'none';
+  const hint = document.getElementById('default-pwd-hint');
+  if (hint && (!curPwd || curPwd.value === await sha256(DEFAULT_PASSWORD))) {
+    hint.innerHTML = 'Lần đầu? Mật khẩu mặc định: <strong>bigbang2026</strong>';
+    hint.style.display = '';
   }
 
   // Check login
@@ -275,6 +277,9 @@ function populateCTVSelect() {
     select.innerHTML = '<option value="">-- Không --</option>' +
       ctvs.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
     if (current) select.value = current;
+  }).catch(e => {
+    console.error('populateCTVSelect', e);
+    showToast('Không tải được danh sách CTV', 'error');
   });
 }
 
@@ -579,13 +584,19 @@ async function checkInventory() {
   warningEl.classList.add('hidden');
 }
 
+// Đếm đã bán từ MẢNG orders có sẵn (không đụng DB) — dùng lại cho render batch.
+function soldFromOrders(orders, showDay, tier) {
+  return orders
+    .filter(o => (o.show_day === showDay || o.show_day === 'both')
+      && o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at)
+    .reduce((sum, o) => sum + (o.quantity || 0), 0);
+}
+
 async function countSold(showDay, tier) {
   const orders = await db.orders
     .where('show_day').anyOf([showDay, 'both'])
     .toArray();
-  return orders
-    .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at)
-    .reduce((sum, o) => sum + (o.quantity || 0), 0);
+  return soldFromOrders(orders, showDay, tier);
 }
 
 // Gợi ý giá nhập từ Tồn kho (chỉ điền khi ô đang trống, không đè giá user gõ tay)
@@ -1337,6 +1348,9 @@ async function refreshInventory() {
   const days = ['day1', 'day2'];
   const warnings = [];
 
+  // Snapshot: load orders 1 LẦN cho cả loop (trước đây query ~20 lần/lần render — N+1).
+  const allOrders = await db.orders.toArray();
+
   for (const day of days) {
     const containerId = `inventory-${day}`;
     const container = document.getElementById(containerId);
@@ -1347,7 +1361,7 @@ async function refreshInventory() {
     for (const tier of tiers) {
       const inv = await db.inventory.where({ show_day: day, ticket_tier: tier }).first();
       const totalStock = inv ? inv.total_stock : 0;
-      const sold = await countSold(day, tier);
+      const sold = soldFromOrders(allOrders, day, tier);
       const remaining = totalStock - sold;
       const costPrice = inv ? inv.cost_price : 0;
 
@@ -1360,10 +1374,9 @@ async function refreshInventory() {
         warnings.push(`${showDayLabel(day)} — ${tier}: Bán vượt ${Math.abs(remaining)} vé!`);
       }
 
-      // Lấy danh sách ghế đã bán cho hạng này
-      const activeOrders = await db.orders.where('ticket_tier').equals(tier).toArray();
-      const seatList = activeOrders
-        .filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && o.seat_number && (o.show_day === day || o.show_day === 'both'))
+      // Lấy danh sách ghế đã bán cho hạng này (từ snapshot, không query lại)
+      const seatList = allOrders
+        .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && o.seat_number && (o.show_day === day || o.show_day === 'both'))
         .map(o => o.seat_number)
         .filter(s => s.trim());
       const seatHTML = seatList.length > 0

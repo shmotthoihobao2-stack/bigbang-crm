@@ -67,7 +67,8 @@
       <button class="btn btn-gold btn-block btn-lg" id="login-btn" onclick="handleLogin()">
         Đăng nhập
       </button>
-      <p class="text-muted mt-md" id="default-pwd-hint" style="font-size:0.72rem">Lần đầu? Mật khẩu mặc định: <strong>bigbang2026</strong></p>
+      <!-- Nội dung hint để TRỐNG trong HTML (không lộ mật khẩu trong view-source); JS chỉ chèn khi pass vẫn mặc định -->
+      <p class="text-muted mt-md" id="default-pwd-hint" style="font-size:0.72rem;display:none"></p>
     </div>
   </div>
 
