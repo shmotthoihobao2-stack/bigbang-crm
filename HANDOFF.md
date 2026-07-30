@@ -76,19 +76,26 @@ Realtime → Supabase postgres_changes → pullAll() → Toast notification
 
 ## 5. DATABASE SCHEMA
 
-### Dexie v4 (sync.js định nghĩa, KHÔNG định nghĩa lại trong app.js)
+### Dexie v5 (sync.js định nghĩa, KHÔNG định nghĩa lại trong app.js)
 ```js
 // app.js: v1 + v2
-// sync.js: v3 (uuid + outbox) + v4 (email)
-db.version(4).stores({
+// sync.js: v3 (uuid + outbox) + v4 (email) + v5 (bảng history — snapshot chống mất dữ liệu)
+db.version(5).stores({
   customers: '++id, uuid, name, phone, email, zalo, social, source, note, created_at',
   orders: '++id, uuid, order_code, customer_id, show_day, ticket_tier, ...',
   inventory: '++id, uuid, show_day, ticket_tier, total_stock, cost_price',
   settings: 'key',
   resales: '++id, uuid, order_id, customer_name, status, created_at',
-  outbox: '++id, table_name, created_at'
+  outbox: '++id, table_name, created_at',
+  history: '++id, table_name, uuid, replaced_at'
 });
 ```
+
+### `show_day` — 4 giá trị (KHÔNG phải 3, dễ nhầm)
+- `day1` / `day2`: 1 vé, ngày cụ thể.
+- `both`: **2 vé** — 1 vé mỗi ngày (cộng dồn cả tồn kho lẫn giá vốn Day1+Day2).
+- `flex` (R6, 2026-07-30): **1 vé, CHƯA chốt ngày** ("ngày nào cũng được, miễn còn vé"). Khác hẳn `both`. Cố tình **KHÔNG trừ tồn kho** ngày nào (`soldFromOrders`/`countSold` không match `flex`) — anh tự sửa đơn sang `day1`/`day2` khi chốt ngày thật. Giá vốn để trống, tự nhập tay (Dashboard cảnh báo nếu quên). Xem danh sách đơn `flex` ở tab Tồn kho → card "🎟️ Khách chưa chốt ngày" (tự ẩn nếu không có đơn nào).
+- `show_day` là `text` thuần trong Supabase, **không CHECK/ENUM** — thêm giá trị mới không cần migration SQL.
 
 ### Supabase tables (cloud)
 - `customers` — bao gồm cột `email text DEFAULT ''`
@@ -129,6 +136,7 @@ db.version(4).stores({
 | 17/06 | Round 3 | --accent-gold undefined, CTV doanh thu đếm sai, tồn kho ghế soft-delete, interval logout, giá vốn 2 ngày, toast lỗi bị chặn |
 | 17/06 | Round 4 | Bảo mật: bucket payment_proofs PUBLIC→PRIVATE + signed URL; backup redact secret (không còn hash pw/email Supabase) |
 | 02/07 | Round 5 | Audit Principal Architect (3 agent + verify chéo). Fix 7 việc — (P0) `lookup_order` guard null-phone+length (chống lộ đơn khách không SĐT); (P1) `refreshInventory` batch-load orders 1 lần thay ~20 query N+1; (P1) validate creds Supabase TRƯỚC khi lưu DB; (P2) realtime auto re-subscribe backoff + generation guard; (P2) toast khi load connect fail; (P3) `.catch()` populateCTVSelect; (P3) hint mật khẩu không nhúng HTML (JS chèn khi còn default). Bác 7 false-positive. **⚠️ Cần chạy lại `supabase-setup.sql` live cho P0.** |
+| 30/07 | Round 6 | **Ngày linh động (`show_day='flex'`)**: 1 vé chưa chốt ngày, khác `both` (2 vé). Soát bằng 2 agent + verify tay trước khi code — phát hiện rủi ro mất dữ liệu (4 chỗ `select.value = show_day` fail-silent nếu thiếu `<option>`) và 2 chỗ ternary hardcode gửi sai "Cả 2 ngày" ra email/Zalo cho khách — cả 2 đã fix. **Bảng khách theo hạng vé** trong tab Tồn kho: dòng tóm tắt (đếm theo trạng thái) + modal chi tiết khi bấm, card riêng cho đơn `flex` (tự ẩn nếu rỗng). Không đổi schema, không cần chạy SQL, không bump Dexie version. |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 
