@@ -22,7 +22,7 @@
 | **Repo** | https://github.com/shmotthoihobao2-stack/bigbang-crm (Public) |
 | **Hosting** | GitHub Pages (CI/CD qua GitHub Actions) |
 | **Mật khẩu test** | `bigbang2026` |
-| **DB version** | Dexie v4 |
+| **DB version** | Dexie v5 |
 
 ## 3. KIẾN TRÚC KỸ THUẬT
 
@@ -40,7 +40,7 @@ tracuu.html ← Trang tra cứu đơn công khai
 | Thành phần | Công nghệ |
 |---|---|
 | Frontend | Vanilla HTML/CSS/JS |
-| Local DB | Dexie.js (IndexedDB) v4 |
+| Local DB | Dexie.js (IndexedDB) v5 |
 | Cloud DB | Supabase (PostgreSQL + Auth + Realtime) |
 | Cloud Storage | Supabase Storage (`payment_proofs` bucket) |
 | Charts | Chart.js v4.4.0 |
@@ -108,17 +108,22 @@ db.version(5).stores({
 
 | File | Dòng | Chức năng chính |
 |---|---|---|
-| `app.js` | ~2400 | DB setup (v1-v2), STATE, UI rendering, CRUD, Bill generation, Charts, Import/Export, Resales, showConfirm/Toast |
-| `sync.js` | ~540 | DB setup (v3-v4), Supabase connect, toCloud(), pullAll(), outbox queue, Realtime subscription, firstSyncUpload() |
-| `index.html` | ~820 | HTML structure: login, 6 tabs, modals (order, detail, bill, confirm), CDN scripts |
-| `style.css` | ~1100 | Dark theme, responsive, glassmorphism cards, animations |
-| `tracuu.html` | ~200 | Trang tra cứu đơn công khai (standalone, dùng Supabase trực tiếp) |
+| `app.js` | ~2880 | DB setup (v1-v2), STATE, UI rendering, CRUD, Bill generation, Charts, Import/Export, Resales, showConfirm/Toast |
+| `sync.js` | ~866 | DB setup (v3-v5), Supabase connect, toCloud(), pullAll(), outbox queue, Realtime subscription, firstSyncUpload() |
+| `index.html` | ~949 | HTML structure: login, 6 tabs, modals (order, detail, bill, confirm), CDN scripts |
+| `style.css` | ~1765 | Dark theme, responsive, glassmorphism cards, animations |
+| `tracuu.html` | ~218 | Trang tra cứu đơn công khai (standalone, dùng Supabase trực tiếp) |
 
 ### Quy tắc khi sửa code
 1. **Thêm cột DB mới** → Sửa 3 chỗ trong sync.js: `db.version()`, `toCloud()`, `pullAll()`
 2. **KHÔNG khai báo db.version() trong app.js từ v3 trở lên** — tất cả nằm trong sync.js
 3. **Thêm cột Supabase** → Chạy `ALTER TABLE` trên SQL Editor
 4. **Sau khi sửa** → `git add . && git commit && git push` → GitHub Pages tự deploy
+5. **⚠️ BẮT BUỘC bump `?v=` mỗi lần deploy** (`index.html` dòng `style.css?v=`, `app.js?v=`, `sync.js?v=`) —
+   Round 7 phát hiện token đứng yên từ 15/06 qua 3 vòng sửa app.js (R5, R6×2), khiến thiết bị đã mở app
+   giữ bản `app.js` cũ trong HTTP cache dù `index.html` đã cập nhật → tính năng mới lỗi thầm lặng
+   (`ReferenceError` không toast). `sw.js` là kill-switch (không cache), cơ chế chống-cache-cũ DUY NHẤT
+   còn lại là token này.
 
 ## 7. LỊCH SỬ PHÁT TRIỂN (TÓM TẮT)
 
@@ -137,6 +142,7 @@ db.version(5).stores({
 | 17/06 | Round 4 | Bảo mật: bucket payment_proofs PUBLIC→PRIVATE + signed URL; backup redact secret (không còn hash pw/email Supabase) |
 | 02/07 | Round 5 | Audit Principal Architect (3 agent + verify chéo). Fix 7 việc — (P0) `lookup_order` guard null-phone+length (chống lộ đơn khách không SĐT); (P1) `refreshInventory` batch-load orders 1 lần thay ~20 query N+1; (P1) validate creds Supabase TRƯỚC khi lưu DB; (P2) realtime auto re-subscribe backoff + generation guard; (P2) toast khi load connect fail; (P3) `.catch()` populateCTVSelect; (P3) hint mật khẩu không nhúng HTML (JS chèn khi còn default). Bác 7 false-positive. **⚠️ Cần chạy lại `supabase-setup.sql` live cho P0.** |
 | 30/07 | Round 6 | **Ngày linh động (`show_day='flex'`)**: 1 vé chưa chốt ngày, khác `both` (2 vé). Soát bằng 2 agent + verify tay trước khi code — phát hiện rủi ro mất dữ liệu (4 chỗ `select.value = show_day` fail-silent nếu thiếu `<option>`) và 2 chỗ ternary hardcode gửi sai "Cả 2 ngày" ra email/Zalo cho khách — cả 2 đã fix. **Bảng khách theo hạng vé** trong tab Tồn kho: dòng tóm tắt (đếm theo trạng thái) + modal chi tiết khi bấm, card riêng cho đơn `flex` (tự ẩn nếu rỗng). Không đổi schema, không cần chạy SQL, không bump Dexie version. |
+| 30/07 | Round 7 (audit) | **Audit tổng thể 3 agent song song + tự verify tay từng phát hiện nặng.** Vá 3 lỗi P0: (1) `pullAll` thiếu `deleted_at:null` ở 4 nhánh merge → nút "Khôi phục" Thùng rác vô hiệu khi dùng 2 máy (đơn tự chui lại thùng rác, xóa cứng sau 30 ngày); (2) cache-bust `?v=` đứng yên 6 tuần → bump (xem quy tắc #5 mục 6); (3) import backup âm thầm reset mật khẩu app về mặc định công khai → giữ key `password`/`supabaseEmail`/... qua import. Vá 5 P1/P2: esc(tier) sót ở cảnh báo bán vượt, cảnh báo đơn mang hạng đã xóa khỏi Settings, biểu đồ doanh thu đồng bộ `ACTIVE_STATUSES` với stat card, trục X biểu đồ gom theo ngày thật (không sort chuỗi dd/mm), card flex đếm vé thay vì đơn, mục "đã cọc chưa TT đủ" thêm ngưỡng tuổi đơn, Thùng rác auto-refresh ở tab Cài đặt, `_pullBusy` chống pullAll chạy chồng gây nhân đôi đơn, `pruneCloudOrphansAfterImport()` dọn cloud sau import. **Còn tồn (ghi nhận, chưa vá — round riêng nếu cần):** index `uuid` không unique (cần bump Dexie v6+dedupe), mã đơn tuần tự dò được qua `lookup_order` (rate-limit), tài liệu `.md` còn nhiều chỗ lệch code thật. |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 
