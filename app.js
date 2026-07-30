@@ -417,6 +417,7 @@ function showDayLabel(day) {
   if (day === 'day1') return 'Day 1 (24/10)';
   if (day === 'day2') return 'Day 2 (25/10)';
   if (day === 'both') return 'Cả 2 ngày';
+  if (day === 'flex') return 'Linh động (chưa chốt ngày)';
   return day;
 }
 
@@ -553,6 +554,12 @@ async function checkInventory() {
     return;
   }
 
+  // Vé linh động (flex) chưa gắn ngày cụ thể -> không có tồn kho nào để so, cố tình bỏ qua cảnh báo.
+  if (day === 'flex') {
+    warningEl.classList.add('hidden');
+    return;
+  }
+
   const days = day === 'both' ? ['day1', 'day2'] : [day];
 
   // Đang SỬA đơn: trừ chính đơn này ra khỏi số đã bán (tránh cảnh báo sai)
@@ -606,6 +613,8 @@ async function suggestCostPrice() {
   const day = document.getElementById('order-day').value;
   const tier = document.getElementById('order-tier').value;
   if (!day || !tier) return;
+  // Vé linh động (flex) chưa gắn ngày -> không biết lấy giá nhập ngày nào, cố tình để trống cho anh tự nhập tay.
+  if (day === 'flex') return;
   // 'Cả 2 ngày' = 2 vé riêng → vốn = vốn Day1 + vốn Day2 (khớp cách tính lợi nhuận)
   const days = day === 'both' ? ['day1', 'day2'] : [day];
   let cost = 0;
@@ -747,8 +756,8 @@ async function sendTicketEmail(orderId) {
   // Xác nhận trước khi gửi
   showConfirm(`Gửi email xác nhận đơn ${order.order_code} đến:\n📧 ${customer.email}\n\nBạn chắc chắn?`, async () => {
     try {
-      const showDayText = order.show_day === 'day1' ? 'Day 1 — 24/10/2026' 
-        : (order.show_day === 'day2' ? 'Day 2 — 25/10/2026' : 'Cả 2 ngày — 24 & 25/10/2026');
+      // Dùng showDayLabel() dùng chung — tránh lệch pha khi thêm giá trị show_day mới (vd 'flex')
+      const showDayText = showDayLabel(order.show_day);
       
       const shopPhone = (await db.settings.get('shopPhone'))?.value || '';
       const seatInfo = order.seat_number ? `Số ghế: ${order.seat_number}` : '';
@@ -950,7 +959,8 @@ async function openDetailModal(orderId) {
   }
 
   const custName = customer && customer.name ? customer.name : 'bạn';
-  const showDayText = order.show_day === 'day1' ? '24/10' : (order.show_day === 'day2' ? '25/10' : 'Cả 2 ngày');
+  // Dùng showDayLabel() dùng chung — tránh lệch pha khi thêm giá trị show_day mới (vd 'flex')
+  const showDayText = showDayLabel(order.show_day);
   const msgTemplate = `Quân chào bạn ${custName},\nQuân đã nhận được cọc ${formatVND(order.deposit_amount)} cho đơn vé ${order.quantity} x ${order.ticket_tier} ngày ${showDayText}.\nMã đơn của bạn là: ${order.order_code}.\nKhi nào có mã vé QR Quân sẽ báo bạn ngay nhé! Cám ơn bạn ạ!`;
 
   // Bucket ảnh CK là private -> sinh signed URL tạm để xem (null nếu offline/chưa kết nối)
@@ -1606,21 +1616,33 @@ async function refreshDashboard() {
 
   // Chi phí vốn: ưu tiên giá vốn ghi TRÊN ĐƠN (chính xác từng lần đặt).
   // Đơn cũ chưa có cost_price → fallback giá nhập gợi ý ở Tồn kho (đơn 'cả 2 ngày' = vốn Day1 + Day2).
+  // Đơn 'flex' (ngày linh động) không tra được Tồn kho ngày nào -> nếu chưa nhập tay thì vốn = 0,
+  // đếm lại để báo cảnh báo rõ ràng thay vì để lợi nhuận âm thầm bị thổi phồng.
   let totalCost = 0;
+  let missingCostCount = 0;
   for (const order of confirmedOrders) {
     if (order.cost_price > 0) {
       totalCost += order.cost_price * (order.quantity || 0);
       continue;
     }
     const days = order.show_day === 'both' ? ['day1', 'day2'] : [order.show_day];
+    let foundCost = false;
     for (const d of days) {
       const inv = await db.inventory.where({ show_day: d, ticket_tier: order.ticket_tier }).first();
       if (inv && inv.cost_price) {
         totalCost += inv.cost_price * (order.quantity || 0);
+        foundCost = true;
       }
     }
+    if (!foundCost) missingCostCount++;
   }
   const profit = totalRevenue - totalCost;
+  const missingCostEl = document.getElementById('missing-cost-warning');
+  if (missingCostEl) {
+    missingCostEl.textContent = missingCostCount > 0
+      ? `⚠️ ${missingCostCount} đơn chưa có giá vốn — số lợi nhuận trên chưa chính xác`
+      : '';
+  }
 
   document.getElementById('stat-total-orders').textContent = totalOrders;
   const pipelineEl = document.getElementById('stat-pipeline-note');

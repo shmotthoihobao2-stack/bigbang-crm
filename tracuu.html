@@ -155,7 +155,7 @@
       'hủy': ['rgba(120,144,156,0.15)', '#78909c', 'ĐÃ HỦY'],
     };
     const fmt = n => new Intl.NumberFormat('vi-VN').format(n || 0) + 'đ';
-    const dayLabel = d => d === 'day1' ? 'Day 1 (24/10/2026)' : d === 'day2' ? 'Day 2 (25/10/2026)' : d === 'both' ? 'Cả 2 ngày (24–25/10)' : d;
+    const dayLabel = d => d === 'day1' ? 'Day 1 (24/10/2026)' : d === 'day2' ? 'Day 2 (25/10/2026)' : d === 'both' ? 'Cả 2 ngày (24–25/10)' : d === 'flex' ? 'Linh động (chốt sau)' : d;
 
     async function lookup() {
       const code = document.getElementById('code').value.trim();
