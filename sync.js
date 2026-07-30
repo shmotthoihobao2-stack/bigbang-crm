@@ -415,6 +415,31 @@ async function reconcile(forceAll = false) {
 }
 window.reconcileSync = reconcile; // cho nút "Đồng bộ lại toàn bộ" trong app.js gọi
 
+// Dọn record MỒ CÔI trên cloud sau khi Import backup / Tạo dữ liệu mẫu (seedData) ghi đè local.
+// LÝ DO CẦN HÀM RIÊNG: reconcile() ở trên chỉ duyệt record LOCAL rồi so với cloud -> record nào có
+// trên cloud nhưng KHÔNG có trong local (vd 20 đơn cũ vừa bị import ghi đè mất) thì reconcile không
+// bao giờ thấy để mà xóa -> pullAll kế tiếp coi đó là "cloud mới hơn, local chưa có" rồi ADD LẠI ->
+// dữ liệu cũ tự "sống lại" ~30s sau khi import, trái với lời hứa "Import sẽ ghi đè toàn bộ".
+async function pruneCloudOrphansAfterImport() {
+  if (!sbReady) return;
+  for (const t of SYNC_TABLES) {
+    let cloudRows = [];
+    try {
+      const { data, error } = await sb.from(t).select('uuid,deleted');
+      if (error) throw error;
+      cloudRows = data || [];
+    } catch (e) { console.warn('pruneCloudOrphans fetch', t, e.message); continue; }
+    const localUuids = new Set((await db[t].toArray()).map(r => r.uuid).filter(Boolean));
+    for (const cr of cloudRows) {
+      if (!cr.deleted && cr.uuid && !localUuids.has(cr.uuid)) {
+        await enqueue(t, 'delete', { uuid: cr.uuid });
+      }
+    }
+  }
+  await processOutbox();
+}
+window.pruneCloudOrphansAfterImport = pruneCloudOrphansAfterImport;
+
 // Lưu snapshot bản local CŨ trước khi bị bản cloud mới hơn ghi đè -> có thể khôi phục (chống mất dữ liệu)
 async function snapshotHistory(table, oldRec, source) {
   try {
@@ -427,8 +452,12 @@ async function snapshotHistory(table, oldRec, source) {
 }
 
 // ===== KÉO DỮ LIỆU CLOUD VỀ & MERGE =====
+let _pullBusy = false; // chặn 2 pullAll chạy CHỒNG NHAU (online + visibilitychange + interval 30s có thể bắn gần như cùng lúc)
+                        // -> nếu không chặn: 2 vòng cùng thấy "chưa có local", cùng .add() -> sinh 2 dòng TRÙNG uuid, không tự sửa được.
 async function pullAll(showResult) {
   if (!sbReady) return;
+  if (_pullBusy) return;
+  _pullBusy = true;
   pulling++;
   try {
     const nowIso = new Date().toISOString();
@@ -451,7 +480,9 @@ async function pullAll(showResult) {
       } else {
         if (new Date(cc.updated_at) > new Date(local.updated_at || 0)) {
           await snapshotHistory('customers', local, 'pull');
-          await db.customers.update(local.id, { name: cc.name, phone: cc.phone, email: cc.email || '', zalo: cc.zalo, social: cc.social, source: cc.source, note: cc.note, updated_at: cc.updated_at });
+          // deleted_at: null BẮT BUỘC — cloud nói "chưa xóa" thì local phải RA khỏi Thùng rác.
+          // Thiếu dòng này: máy A xóa, máy B khôi phục -> A vẫn giữ deleted_at -> reconcile của A đẩy lệnh xóa lại lên cloud -> ping-pong vô hạn, 30 ngày sau xóa cứng.
+          await db.customers.update(local.id, { name: cc.name, phone: cc.phone, email: cc.email || '', zalo: cc.zalo, social: cc.social, source: cc.source, note: cc.note, updated_at: cc.updated_at, deleted_at: null });
         }
         uuidToLocalId[cc.uuid] = local.id;
       }
@@ -472,7 +503,8 @@ async function pullAll(showResult) {
         show_day: co.show_day, ticket_tier: co.ticket_tier, quantity: co.quantity,
         unit_price: co.unit_price, cost_price: co.cost_price || 0, total: co.total, deposit_amount: co.deposit_amount,
         status: co.status, delivery_method: co.delivery_method, ctv: co.ctv, seat_number: co.seat_number || '', ticket_source: co.ticket_source || '', combo_info: co.combo_info || '', payment_proof: co.payment_proof || '', note: co.note,
-        created_at: co.created_at, updated_at: co.updated_at
+        created_at: co.created_at, updated_at: co.updated_at,
+        deleted_at: null // cloud báo chưa xóa -> local phải khớp, tránh ping-pong với Thùng rác (xem comment ở nhánh customers)
       };
       if (!local) { const id = await db.orders.add({ uuid: co.uuid, ...fields }); orderUuidToLocalId[co.uuid] = id; }
       else {
@@ -487,7 +519,7 @@ async function pullAll(showResult) {
     for (const ci of (cloudInv || [])) {
       const local = await db.inventory.where('uuid').equals(ci.uuid).first();
       if (ci.deleted) { if (local && !local.deleted_at) await db.inventory.update(local.id, { deleted_at: ci.updated_at || nowIso, updated_at: ci.updated_at || nowIso }); continue; }
-      const invFields = { show_day: ci.show_day, ticket_tier: ci.ticket_tier, total_stock: ci.total_stock, cost_price: ci.cost_price, updated_at: ci.updated_at };
+      const invFields = { show_day: ci.show_day, ticket_tier: ci.ticket_tier, total_stock: ci.total_stock, cost_price: ci.cost_price, updated_at: ci.updated_at, deleted_at: null };
       if (!local) await db.inventory.add({ uuid: ci.uuid, ...invFields });
       else if (new Date(ci.updated_at || 0) > new Date(local.updated_at || 0)) await db.inventory.update(local.id, invFields);
     }
@@ -503,7 +535,8 @@ async function pullAll(showResult) {
         order_code: cr.order_code, customer_name: cr.customer_name, customer_phone: cr.customer_phone,
         show_day: cr.show_day, ticket_tier: cr.ticket_tier, quantity: cr.quantity,
         original_price: cr.original_price, asking_price: cr.asking_price, service_fee: cr.service_fee,
-        reason: cr.reason, seat_number: cr.seat_number || '', note: cr.note, status: cr.status, created_at: cr.created_at, updated_at: cr.updated_at
+        reason: cr.reason, seat_number: cr.seat_number || '', note: cr.note, status: cr.status, created_at: cr.created_at, updated_at: cr.updated_at,
+        deleted_at: null
       };
       if (!local) await db.resales.add({ uuid: cr.uuid, ...fields });
       else if (new Date(cr.updated_at) > new Date(local.updated_at || 0)) { await snapshotHistory('resales', local, 'pull'); await db.resales.update(local.id, fields); }
@@ -534,6 +567,7 @@ async function pullAll(showResult) {
     updateSyncStatus('error');
   } finally {
     pulling--;
+    _pullBusy = false;
     updateSyncStatus();
   }
 }

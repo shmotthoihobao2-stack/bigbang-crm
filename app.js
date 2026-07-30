@@ -330,7 +330,7 @@ function switchTab(tab) {
   if (tab === 'inventory') refreshInventory();
   if (tab === 'followup') refreshFollowup();
   if (tab === 'resale') refreshResales();
-  if (tab === 'settings') renderCTVs();
+  if (tab === 'settings') { renderCTVs(); refreshTrash(); }
 }
 
 // ===== REFRESH ALL =====
@@ -1388,7 +1388,8 @@ async function refreshInventory() {
       const isWarning = !unlimited && remaining < 0;
 
       if (isWarning) {
-        warnings.push(`${showDayLabel(day)} — ${tier}: Bán vượt ${Math.abs(remaining)} vé!`);
+        // esc(tier): tên hạng do user tự nhập tự do (addTier) -> phải escape trước khi nhét vào innerHTML (warningsEl bên dưới), chống XSS + vỡ HTML.
+        warnings.push(`${showDayLabel(day)} — ${esc(tier)}: Bán vượt ${Math.abs(remaining)} vé!`);
       }
 
       // Lấy danh sách ghế đã bán cho hạng này (từ snapshot, không query lại)
@@ -1441,6 +1442,18 @@ async function refreshInventory() {
     container.innerHTML = headerHTML + rows;
   }
 
+  // Lưới an toàn: đơn mang ticket_tier KHÔNG còn nằm trong danh sách hạng vé hiện tại (vd sau khi
+  // đổi tên hạng theo maps BTC công bố — xóa hạng cũ mà quên sửa đơn cũ) sẽ biến mất khỏi mọi bảng
+  // trên mà không cảnh báo gì. removeTier() chỉ xóa record inventory, KHÔNG đụng orders.
+  const orphanTierOrders = allOrders.filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && !tiers.includes(o.ticket_tier));
+  if (orphanTierOrders.length > 0) {
+    const byTier = {};
+    for (const o of orphanTierOrders) byTier[o.ticket_tier] = (byTier[o.ticket_tier] || 0) + 1;
+    for (const [t, count] of Object.entries(byTier)) {
+      warnings.push(`${count} đơn mang hạng "${esc(t)}" không còn trong danh sách hạng vé (Cài đặt) — kiểm tra lại tên hạng`);
+    }
+  }
+
   // ===== Khách "ngày linh động" (flex) — chưa chốt ngày, cố tình không thuộc kho ngày nào =====
   const flexCard = document.getElementById('inventory-flex-card');
   const flexContainer = document.getElementById('inventory-flex');
@@ -1456,6 +1469,10 @@ async function refreshInventory() {
         const tier = tiers[ti];
         const tierFlexOrders = flexOrders.filter(o => o.ticket_tier === tier);
         if (tierFlexOrders.length === 0) continue;
+        // Đếm theo VÉ (quantity), không phải theo SỐ ĐƠN — 1 đơn có thể mua nhiều vé.
+        // Trước đây hiện tierFlexOrders.length (số đơn) khiến 1 đơn mua 3 vé chỉ hiện "1", sai với
+        // mục đích "nắm rõ từng hạng bao nhiêu vé" (lý do chính anh yêu cầu tính năng này).
+        const tierFlexTickets = tierFlexOrders.reduce((s, o) => s + (o.quantity || 0), 0);
         const statusCounts = {};
         for (const o of tierFlexOrders) statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
         const summaryText = Object.entries(statusCounts).map(([st, c]) => `${c} ${st}`).join(' · ');
@@ -1463,8 +1480,8 @@ async function refreshInventory() {
           <div class="inventory-row" style="cursor:pointer" onclick="openTierCustomers('flex', ${ti})">
             <div><span class="inventory-tier">${esc(tier)}</span></div>
             <div>
-              <span class="inventory-number">${tierFlexOrders.length}</span>
-              <span class="inventory-sub">khách</span>
+              <span class="inventory-number">${tierFlexTickets}</span>
+              <span class="inventory-sub">vé (${tierFlexOrders.length} khách)</span>
             </div>
             <div style="grid-column:3/-1;text-align:left">
               <span style="font-size:0.75rem;color:var(--text-muted)">${esc(summaryText)} · ▸ xem</span>
@@ -1608,10 +1625,17 @@ async function refreshFollowup() {
     o.status === 'mới' && new Date(o.created_at) < h24ago
   );
 
-  // Đã cọc chưa TT đủ (gần show: < 14 ngày)
-  const unpaid = orders.filter(o =>
-    o.status === 'đã cọc' && daysUntilShow <= 14
-  );
+  // Đã cọc chưa TT đủ — nhắc khi GẦN ngày diễn (≤14 ngày, kể cả sau ngày diễn thì daysUntilShow âm
+  // vẫn đúng là cần nhắc tiếp) HOẶC đơn đã cọc quá LÂU (≥14 ngày kể từ lúc tạo — không có field ngày
+  // cọc riêng trong schema nên dùng created_at làm mốc gần đúng, đủ dùng cho quy mô 1-2 người).
+  // Trước đây CHỈ xét theo daysUntilShow (hằng số toàn cục, show 24-25/10/2026) -> mục này im lặng
+  // suốt từ lúc show được tạo tới 14 ngày trước show (~2.5 tháng), dù có hàng chục đơn đã cọc lâu.
+  const unpaid = orders.filter(o => {
+    if (o.status !== 'đã cọc') return false;
+    if (daysUntilShow <= 14) return true;
+    const daysSinceDeposit = Math.floor((now - new Date(o.created_at)) / (1000 * 60 * 60 * 24));
+    return daysSinceDeposit >= 14;
+  });
 
   // Update badge
   const totalFollowup = newOver24h.length + unpaid.length;
@@ -1755,16 +1779,23 @@ async function refreshDashboard() {
 }
 
 function renderCharts(orders) {
-  const activeOrders = orders.filter(o => o.status !== 'hủy' && o.status !== 'hoàn cọc' && !o.deleted_at);
+  // Dùng chung ACTIVE_STATUSES với stat card "Doanh thu" (refreshDashboard) — trước đây chart này chỉ
+  // loại 'hủy'/'hoàn cọc' nên vẫn cộng cả đơn 'mới' (chưa cọc đồng nào), lệch với số ở stat card.
+  const activeOrders = orders.filter(o => ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
 
   // Chart 1: Revenue by date
+  // Gom theo YYYY-MM-DD (sort đúng theo thời gian thật) rồi mới format dd/mm lúc render nhãn.
+  // Trước đây gom trực tiếp theo formatDateShort() = "dd/mm" rồi .sort() theo CHUỖI -> "01/10" đứng
+  // trước "30/07" (so ký tự, không so ngày thật) -> biểu đồ vẽ răng cưa sai khi chạy qua nhiều tháng.
   const dateMap = {};
   activeOrders.forEach(o => {
-    const d = formatDateShort(o.created_at);
-    dateMap[d] = (dateMap[d] || 0) + (o.total || 0);
+    if (!o.created_at) return;
+    const key = new Date(o.created_at).toISOString().slice(0, 10); // YYYY-MM-DD
+    dateMap[key] = (dateMap[key] || 0) + (o.total || 0);
   });
-  const dateLabels = Object.keys(dateMap).sort();
-  const dateData = dateLabels.map(d => dateMap[d]);
+  const sortedKeys = Object.keys(dateMap).sort();
+  const dateLabels = sortedKeys.map(k => formatDateShort(k));
+  const dateData = sortedKeys.map(k => dateMap[k]);
 
   const ctx1 = document.getElementById('chart-orders-by-date');
   if (chartOrdersByDate) chartOrdersByDate.destroy();
@@ -2259,6 +2290,11 @@ async function importAllData(event) {
         // bulkAdd BỎ QUA Dexie hook -> tự gán uuid NGAY trong object trước khi ghi (atomic trong transaction).
         // Cũ: backfill uuid chạy NGOÀI transaction -> tắt app giữa chừng = record thiếu uuid vĩnh viễn, không sync.
         const withUuid = (arr) => (arr || []).map(r => ({ ...r, uuid: r.uuid || genUUID() }));
+        // File backup CỐ TÌNH không chứa các key này (xem SECRET_KEYS ở exportAllData — bảo mật khi chia sẻ file).
+        // Nếu không cứu lại: settings.clear() xóa luôn -> app tự sinh mật khẩu mặc định lúc F5 kế tiếp (lỗ hổng bảo mật thật).
+        const KEEP_KEYS_ACROSS_IMPORT = ['password', 'supabasePassword', 'supabasePasswordEnc', 'supabaseEmail'];
+        const keptSettings = (await db.settings.bulkGet(KEEP_KEYS_ACROSS_IMPORT)).filter(Boolean);
+
         await db.transaction('rw', db.customers, db.orders, db.inventory, db.settings, db.resales, async () => {
           await db.customers.clear();
           await db.orders.clear();
@@ -2271,14 +2307,18 @@ async function importAllData(event) {
           if (data.inventory) await db.inventory.bulkAdd(withUuid(data.inventory));
           if (data.settings) await db.settings.bulkAdd(data.settings);
           if (data.resales) await db.resales.bulkAdd(withUuid(data.resales));
+          // Ghi lại SAU bulkAdd(data.settings) để đè bất kỳ giá trị trùng key nào từ file (không nên có, nhưng an toàn hơn).
+          if (keptSettings.length) await db.settings.bulkPut(keptSettings);
         });
 
         // Đẩy toàn bộ dữ liệu vừa import lên cloud (nếu đang kết nối)
         if (typeof window.reconcileSync === 'function') await window.reconcileSync(true);
+        // Xóa trên cloud những record KHÔNG còn trong file backup (reconcileSync chỉ đẩy lên, không tự xóa thừa — xem comment pruneCloudOrphansAfterImport trong sync.js)
+        if (typeof window.pruneCloudOrphansAfterImport === 'function') await window.pruneCloudOrphansAfterImport();
 
         await loadSettings();
         await refreshAll();
-        showToast('Đã import dữ liệu thành công!', 'success');
+        showToast('Đã import dữ liệu thành công! (Mật khẩu app & kết nối cloud giữ nguyên)', 'success');
       } catch (err) {
         console.error('import', err);
         showToast('Lỗi import: ' + (err && err.message ? err.message : err) + '. Dữ liệu cũ được giữ nguyên (rollback).', 'error');
