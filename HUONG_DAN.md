@@ -16,11 +16,18 @@
 
 ## 🎫 Thêm đơn hàng (< 30 giây)
 
-1. Bấm nút **＋** (vàng, góc dưới phải) hoặc **+ Thêm đơn**
+1. Bấm nút **＋** (vàng, góc dưới phải) hoặc **+ Tạo đơn mới**
 2. Nhập **SĐT khách** → nếu khách cũ sẽ tự điền tên/Zalo
 3. Chọn **Ngày diễn** + **Hạng vé** + **Số lượng** + **Đơn giá**
+   - Ngày diễn có 4 lựa chọn: **Day 1** / **Day 2** / **Cả 2 ngày** (2 vé, mỗi ngày 1) / **Ngày nào cũng được** (1 vé, khách chưa chốt ngày — xem mục riêng bên dưới)
 4. Nhập **Tiền cọc** (nếu có)
 5. Bấm **💾 Lưu đơn** → Mã đơn BB-XXXX tự sinh
+
+### 🎟️ Đơn "Ngày nào cũng được" (linh động)
+Dùng khi khách chỉ cần đi concert, không kén ngày nào. Khác với "Cả 2 ngày" (2 vé riêng, 1 vé/ngày):
+- Chỉ tính là **1 vé**, **KHÔNG trừ tồn kho** của Day 1 hay Day 2 (vì chưa biết chốt ngày nào)
+- Tab Tồn kho có card riêng **"🎟️ Khách chưa chốt ngày"** liệt kê theo hạng, giúp biết còn bao nhiêu khách đang chờ
+- Ô **Giá nhập** cố tình để trống (không biết vốn ngày nào) → Dashboard sẽ cảnh báo "N đơn chưa nhập giá vốn", đây là **bình thường**, không phải lỗi — khi khách chốt ngày, sửa đơn sang Day 1/Day 2 thì giá vốn tự tính lại đúng
 
 ## 🔄 Đổi trạng thái đơn
 
@@ -89,9 +96,13 @@ Khách **không đi được** hoặc **muốn đổi hạng vé** → nhận k�
 - Nhập mật khẩu mới (tối thiểu 4 ký tự)
 
 ### Export / Backup
-- **Export CSV**: Xuất toàn bộ đơn hàng ra file Excel
-- **Backup toàn bộ**: Tải file JSON chứa tất cả data
-- **Import backup**: Khôi phục từ file backup JSON
+- **📊 Export Excel**: Xuất file `.xlsx` 3 sheet (Đơn hàng, Tồn kho, Tổng hợp) — CSV chỉ dùng dự phòng nếu thư viện Excel không tải được
+- **Backup toàn bộ**: Tải file JSON chứa tất cả data (KHÔNG chứa mật khẩu app/mật khẩu Supabase — an toàn khi chia sẻ file)
+- **Import backup**: Khôi phục từ file backup JSON — **ghi đè toàn bộ** dữ liệu hiện tại, mật khẩu app/kết nối cloud của máy đang dùng được giữ nguyên
+
+### 🗑️ Thùng rác & 🕘 Lịch sử
+- Xóa đơn/khách hàng → vào Thùng rác (Cài đặt), **khôi phục được trong 30 ngày**, sau đó tự xóa cứng
+- Mỗi khi 1 máy khác ghi đè dữ liệu (đồng bộ cloud), bản cũ được lưu vào **Lịch sử** — bấm nút 🕘 trên đơn để xem/khôi phục bản trước đó
 
 ---
 
@@ -125,8 +136,8 @@ Nếu quá **24h chưa backup**, Dashboard sẽ hiện banner đỏ nhắc. Bấ
 **Q: Dữ liệu lưu ở đâu?**
 A: Lưu trong trình duyệt (IndexedDB). Nếu xóa data trình duyệt → mất. Hãy backup thường xuyên!
 
-**Q: Nhiều người dùng cùng lúc được không?**
-A: Hiện tại mỗi trình duyệt có data riêng. Dùng chung 1 máy hoặc backup/import qua lại.
+**Q: Nhiều người dùng/nhiều máy cùng lúc được không?**
+A: **Được** — app đã kết nối Supabase, tự đồng bộ 2 chiều giữa các máy (realtime + poll 30s). Vào Cài đặt → Kết nối cloud, nhập email/mật khẩu Supabase 1 lần trên mỗi máy. **KHÔNG cần** backup/import thủ công để chuyển dữ liệu qua lại — import chỉ dùng khi thật sự cần khôi phục từ file backup, vì nó **ghi đè toàn bộ** dữ liệu hiện tại của máy.
 
 **Q: Quên mật khẩu?**
-A: Mở Console (F12) → gõ: `db.settings.put({key:'password', value:'matkhaumoi'})`
+A: Mở Console (F12) → gõ: `db.settings.put({key:'password', value:'matkhaumoi'})` → **bắt buộc F5 lại trang** (mật khẩu lưu dạng hash SHA-256, phải load lại để app hash chuỗi mới nhập). Nếu gõ 1 chuỗi tình cờ dài đúng 64 ký tự, app sẽ hiểu nhầm là hash sẵn — dùng chuỗi ngắn/dài khác 64 cho chắc.

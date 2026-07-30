@@ -40,7 +40,8 @@ Bản v3 thêm 3 thứ: **(1)** dữ liệu đồng bộ lên cloud Supabase (h�
 ## PHẦN E — Kết nối app
 
 1. Mở BigBang CRM → tab **⚙️ Cài đặt** → mục **☁️ Đồng bộ cloud**
-2. Dán Project URL + anon key, nhập email + mật khẩu ở Phần C
+2. **Project URL + anon key đã hardcode sẵn trong `sync.js`** (2 dòng `DEFAULT_SUPABASE_URL`/`DEFAULT_SUPABASE_KEY`) — không cần dán lại trong app. Chỉ cần nhập **email + mật khẩu** đã tạo ở Phần C.
+   - Nếu clone app này cho dự án/shop KHÁC dùng Supabase riêng: sửa trực tiếp 2 hằng số đó trong `sync.js` (xem `HD_NHAN_BAN_CRM.md`)
 3. Bấm **🔗 Kết nối & đồng bộ**
    - Lần đầu: app tự đẩy toàn bộ dữ liệu local lên cloud
    - Từ đó: mọi thay đổi tự đồng bộ; chấm tròn trên header báo trạng thái:
@@ -63,15 +64,19 @@ Bản v3 thêm 3 thứ: **(1)** dữ liệu đồng bộ lên cloud Supabase (h�
 3. Test: nhập 1 mã đơn thật + 4 số cuối SĐT khách đó → hiện trạng thái đơn
 4. **In link này lên bill / gửi kèm khi chốt cọc** — "Anh/chị tra cứu đơn bất cứ lúc nào tại đây" là câu chốt niềm tin cực mạnh
 
-⚠️ **Tuyệt đối không** đưa `index.html`/`app.js` của CRM lên hosting public — chỉ `tracuu.html` thôi.
+💡 **Cập nhật:** bản BigBang CRM đang chạy production thực tế đã deploy **toàn bộ app** (kể cả `index.html`/`app.js`) lên GitHub Pages public — điều này AN TOÀN vì: (1) anon key chỉ gọi được hàm tra cứu công khai đã che tên (RLS chặn hết phần còn lại), (2) app có màn hình đăng nhập mật khẩu riêng chặn trước khi vào CRM. Khuyến nghị cũ "chỉ đưa tracuu.html" vẫn là lựa chọn AN TOÀN HƠN NỮA nếu anh muốn tách biệt hẳn (khách chỉ thấy trang tra cứu, không thấy cả giao diện quản lý dù có đăng nhập) — tùy anh chọn mức độ.
 
 ## PHẦN G — Cài PWA lên điện thoại
 
-1. App phải chạy qua `http://` (như anh đang chạy `python -m http.server 8085`) — mở bằng `http://localhost:8085`, **không mở kiểu file://**
-2. Trên điện thoại (cùng wifi, mở `http://<IP máy tính>:8085`):
-   - **Android Chrome**: menu ⋮ → "Thêm vào màn hình chính" / "Cài đặt ứng dụng"
-   - **iPhone Safari**: nút Chia sẻ → "Thêm vào MH chính"
-3. App có icon vương miện 👑 riêng, mở fullscreen như app thật, và **vẫn mở được khi mạng chập chờn** (giao diện + dữ liệu local hoạt động; thay đổi xếp hàng chờ, có mạng tự đẩy lên cloud)
+⚠️ **Quan trọng — secure context:** app dùng `crypto.subtle` (mã hóa mật khẩu SHA-256) — trình duyệt CHỈ cho phép chạy trên `https://`, `http://localhost`, hoặc mở trực tiếp `file://`. **`http://<IP máy tính>:port`** (LAN, không phải localhost) **KHÔNG phải secure context** → `crypto.subtle` là `undefined` → bấm Đăng nhập **không có phản ứng gì**, không báo lỗi. Vì vậy trên điện thoại (khác máy chạy server) **không dùng được cách mở qua IP LAN** — dùng 1 trong 2 cách sau:
+1. **Khuyên dùng:** mở thẳng link production đã deploy (`https://shmotthoihobao2-stack.github.io/bigbang-crm/` hoặc domain riêng) — luôn là secure context, không vướng lỗi này.
+2. Nếu chạy hoàn toàn offline/local: mở trực tiếp file `index.html` bằng `file://` trên chính điện thoại đó (Chrome/Safari coi `file://` là potentially-trustworthy).
+
+Cài vào màn hình chính:
+- **Android Chrome**: menu ⋮ → "Thêm vào màn hình chính" / "Cài đặt ứng dụng"
+- **iPhone Safari**: nút Chia sẻ → "Thêm vào MH chính"
+
+App có icon vương miện 👑 riêng, mở fullscreen như app thật. Lưu ý: `sw.js` hiện là **kill-switch** (không cache gì) — mất mạng hoàn toàn thì các thư viện tải từ CDN (Dexie, Chart.js...) sẽ không load được, trang trắng. "Offline" ở đây chỉ đúng cho **ghi dữ liệu** (thay đổi xếp hàng chờ trong outbox, có mạng tự đẩy lên cloud) khi tab đã mở sẵn từ trước, không phải mở app mới hoàn toàn khi không có mạng.
 
 ---
 

@@ -156,20 +156,10 @@ db.version(5).stores({
 
 ## 9. KAIZEN CÒN LẠI (ĐỌC TRƯỚC KHI LÀM)
 
-### Kaizen 5 — Phân trang / Lazy Load (Ưu tiên: TRUNG BÌNH)
-**Mục đích:** App không bị lag khi có 500+ đơn.
-**Cách làm gợi ý:**
-- Thay `db.orders.toArray()` bằng `db.orders.offset(page*50).limit(50).toArray()`
-- Thêm nút "Tải thêm" hoặc infinite scroll ở tab Đơn hàng
-- Dashboard stats vẫn dùng `.count()` và `.sum()` (Dexie hỗ trợ)
-**Rủi ro:** THẤP — chỉ sửa phần render danh sách
-
-### Kaizen 6 — Bảo mật nâng cao (Ưu tiên: THẤP)
-**Mục đích:** Mã hóa mật khẩu, session timeout.
-**Cách làm gợi ý:**
-- Thay lưu plaintext bằng hash (dùng `crypto.subtle.digest('SHA-256', ...)` native)
-- Thêm `sessionTimeout` setting (auto logout sau X phút)
-**Rủi ro:** TRUNG BÌNH — cần migrate mật khẩu cũ
+**✅ ĐÃ XONG (không phải "còn lại" — sửa lại vì HANDOFF cũ liệt kê nhầm):**
+- ~~Kaizen 5 — Phân trang/Lazy Load~~: đã có `ordersPage`/`PAGE_SIZE=50` (app.js:28-29), `loadMoreOrders()`, nút "Tải thêm N đơn" ở tab Đơn hàng.
+- ~~Kaizen 6 — Hash mật khẩu~~: đã có `sha256()` (app.js:363) + migration tự động plaintext→hash khi phát hiện giá trị cũ (app.js:52-58).
+- Còn thiếu thật của Kaizen 6 cũ: **`sessionTimeout`** (auto logout sau X phút) — chưa làm, ưu tiên THẤP.
 
 ### Kaizen 7 — Dark/Light Mode Toggle (Ưu tiên: THẤP)
 **Mục đích:** Cho phép user chọn giao diện sáng/tối.

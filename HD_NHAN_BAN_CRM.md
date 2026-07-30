@@ -38,13 +38,13 @@ Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Dat
 
 **File thứ nhất — `sync.js`** (app chính, QUAN TRỌNG NHẤT):
 3. Mở file **`sync.js`** bằng Notepad (hoặc VSCode).
-4. Tìm đến **Dòng 29, 30** (gần đầu file):
+4. Tìm dòng có chữ `DEFAULT_SUPABASE_URL` (Ctrl+F tìm chữ này, KHÔNG dựa theo số dòng — số dòng đổi mỗi lần code cập nhật):
    ```javascript
    const DEFAULT_SUPABASE_URL = 'https://...supabase.co';
    const DEFAULT_SUPABASE_KEY = 'eyJ...';
    ```
-   Thay bằng `Project URL` và `Anon Key` của khách. Lưu file (`Ctrl + S`).
-   > ⚠️ **Bắt buộc** — nếu bỏ qua bước này, dữ liệu của khách sẽ ghi vào Database của chủ mã nguồn!
+   2 dòng này luôn đứng NGAY CẠNH NHAU. Thay bằng `Project URL` và `Anon Key` của khách. Lưu file (`Ctrl + S`).
+   > ⚠️ **Bắt buộc** — nếu bỏ qua bước này, dữ liệu của khách sẽ ghi vào Database của chủ mã nguồn! (App KHÔNG còn ô nhập URL/Key trong giao diện Cài đặt nữa — 2 ô đó đã ẩn, chỉ còn Email/Mật khẩu — nên đổi trong `sync.js` là CÁCH DUY NHẤT.)
 
 **File thứ hai — `tracuu.html`** (trang tra cứu công khai):
 5. Mở file **`tracuu.html`** bằng Notepad (hoặc VSCode).
@@ -54,6 +54,7 @@ Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Dat
    const SUPABASE_ANON_KEY = 'ĐIỀN_ANON_KEY_CỦA_KHÁCH_VÀO_ĐÂY';
    ```
    Dán thông tin của khách vào. Lưu file lại (`Ctrl + S`).
+   > 💡 File này có sẵn cảnh báo tự động (dòng ~22-25): nếu quên đổi, mở Console (F12) trên `tracuu.html` sẽ thấy `[CẢNH BÁO] tracuu.html đang trỏ về Supabase MẪU` — dùng để tự kiểm tra đã đổi đúng chưa trước khi giao khách.
 
 ### BƯỚC 3: ĐƯA LÊN MẠNG & CHẠY CHÍNH THỨC (NETLIFY)
 1. Khách hàng vào **[Netlify.com](https://app.netlify.com)** -> Đăng nhập/Đăng ký.
@@ -61,8 +62,8 @@ Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Dat
 3. Kéo toàn bộ **thư mục code** (đã giải nén) thả vào ô đó.
 4. Chờ 5 giây, Netlify sẽ cấp cho 1 đường link online (VD: `https://ten-shop-cua-khach.netlify.app`).
 5. Vào đường link đó -> Bấm icon bánh răng (**Cài đặt**).
-6. Dán `URL`, `Anon Key`, và `Email/Mật khẩu` (vừa tạo ở bước 1 Supabase) vào Cài đặt -> Bấm **Lưu & Kiểm tra**.
-7. Báo "Kết nối Supabase Thành công" là XONG! 🎉
+6. URL/Anon Key đã sửa sẵn trong `sync.js` ở BƯỚC 2 nên KHÔNG cần nhập lại — chỉ nhập **Email + Mật khẩu** (vừa tạo ở bước 1 Supabase) vào Cài đặt -> mục ☁️ Đồng bộ cloud -> bấm nút **"🔗 Kết nối & đồng bộ"**.
+7. Chấm tròn trạng thái đồng bộ trên header chuyển sang 🟢 xanh là XONG! 🎉
 
 ---
 
@@ -71,14 +72,14 @@ Khách hàng cần sửa **2 file** để trỏ toàn bộ hệ thống về Dat
 Để hệ thống mang tên của khách hàng (VD: Vé Rẻ VIP thay vì BigBang CRM):
 1. **Đổi chữ:** Mở file `index.html` và `manifest.json`, tìm tất cả chữ `BigBang CRM` đổi thành tên của họ.
 2. **Đổi Logo:** Thay 2 hình ảnh `icon-192.png` và `icon-512.png` trong thư mục bằng logo của họ (bắt buộc giữ nguyên tên file là `icon-...png`, hình vuông, **đúng kích thước 192×192 px và 512×512 px** — sai size một số điện thoại Android sẽ không cài được app).
-3. Sau khi đổi, kéo thả lại thư mục lên **Netlify** để cập nhật. Nhớ đổi số `CACHE` trong file `sw.js` (ví dụ `v7` -> `v8`) để thiết bị tự xóa cache tải logo mới.
+3. Sau khi đổi, kéo thả lại thư mục lên **Netlify** để cập nhật. `sw.js` hiện là **kill-switch** (không có biến `CACHE` nào để đổi — nó tự xóa mọi cache + tự gỡ chính nó ở mọi thiết bị), nên KHÔNG cần sửa gì trong `sw.js`. Nếu deploy qua GitHub Pages (như bản gốc), `?v=` trong `index.html` được `.github/workflows/deploy.yml` tự gắn commit hash mỗi lần đẩy code — không cần tự tay đổi số. Nếu deploy qua Netlify (không có bước tự động này), đổi tay 3 dòng `?v=...` ở cuối `index.html` (`style.css`, `app.js`, `sync.js`) mỗi lần cập nhật để máy khách không giữ bản cache cũ.
 
 ---
 
 ## 🎁 NHỮNG ĐIỂM "ĂN TIỀN" ĐỂ ANH CHÀO BÁN/BÀN GIAO CHO KHÁCH:
 - **Tốc độ bàn thờ:** Không có độ trễ (0ms) do dùng IndexedDB local. Bấm là lưu.
 - **Không bao giờ mất data:** Mất mạng wifi, tắt 4G vẫn tạo đơn bình thường. Có mạng hệ thống tự đẩy (Outbox Sync) lên cloud Supabase ẩn danh.
-- **Tự động hóa tồn kho:** Không cần đếm tay. Đơn tạo có ghi số ghế -> tự trừ tồn kho -> tự liệt kê ghế đã bán.
+- **Tự động hóa tồn kho:** Không cần đếm tay. Đơn tạo ra tự trừ tồn kho theo số lượng vé; nếu có ghi số ghế thì tự liệt kê danh sách ghế đã bán trong tab Tồn kho (ghế chỉ để hiển thị/tra soát, không ảnh hưởng số trừ kho).
 - **Quản lý Nguồn vé thông minh:** Nhập một lần nhớ mãi mãi. Đơn hàng lưu lại nguồn lấy vé (BTC, đại lý, khách pass), hệ thống tự động gợi ý ở lần sau, giúp kiểm soát chéo cực kỳ dễ dàng.
 - **Tra cứu an toàn:** Web có tra cứu online cho khách lẻ, nhưng được bảo mật RLS mã hóa tên (`N***A`), chống đối thủ cào data.
 - **Không tốn tiền Server:** Hosting dùng Netlify Free, Database dùng Supabase Free (chịu tải 50,000 requests/tháng — dư xài cho 1 shop bán vé). Khách mua đứt 1 lần, không phí duy trì.
