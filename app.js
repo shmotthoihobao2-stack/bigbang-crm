@@ -1353,13 +1353,19 @@ function loadMoreOrders() {
 }
 
 // ===== INVENTORY =====
+// Cache cho modal "Khách theo hạng" (openTierCustomers) — refresh mỗi lần refreshInventory() chạy.
+// Truyền tierIdx (số) qua onclick thay vì tên hạng (chuỗi) để tránh lỗi escape khi tên hạng có dấu nháy.
+let inventorySnapshot = { allOrders: [], customerMap: {}, tiers: [] };
+
 async function refreshInventory() {
   const tiers = await getTiers();
   const days = ['day1', 'day2'];
   const warnings = [];
 
-  // Snapshot: load orders 1 LẦN cho cả loop (trước đây query ~20 lần/lần render — N+1).
+  // Snapshot: load orders + customers 1 LẦN cho cả loop (trước đây query ~20 lần/lần render — N+1).
   const allOrders = await db.orders.toArray();
+  const customerMap = toMap(await db.customers.toArray());
+  inventorySnapshot = { allOrders, customerMap, tiers };
 
   for (const day of days) {
     const containerId = `inventory-${day}`;
@@ -1368,7 +1374,8 @@ async function refreshInventory() {
     const headerHTML = container.querySelector('.inventory-row.header')?.outerHTML || '';
 
     let rows = '';
-    for (const tier of tiers) {
+    for (let ti = 0; ti < tiers.length; ti++) {
+      const tier = tiers[ti];
       const inv = await db.inventory.where({ show_day: day, ticket_tier: tier }).first();
       const totalStock = inv ? inv.total_stock : 0;
       const sold = soldFromOrders(allOrders, day, tier);
@@ -1385,14 +1392,25 @@ async function refreshInventory() {
       }
 
       // Lấy danh sách ghế đã bán cho hạng này (từ snapshot, không query lại)
-      const seatList = allOrders
-        .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && o.seat_number && (o.show_day === day || o.show_day === 'both'))
-        .map(o => o.seat_number)
-        .filter(s => s.trim());
+      const tierOrders = allOrders
+        .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at && (o.show_day === day || o.show_day === 'both'));
+      const seatList = tierOrders.map(o => o.seat_number).filter(s => s && s.trim());
       const seatHTML = seatList.length > 0
         ? `<div style="grid-column:1/-1;padding:2px 0 6px;font-size:0.73rem">
              <span style="color:var(--text-muted)">💺 Đã bán:</span>
              <span style="color:var(--status-refund)">${seatList.map(s => esc(s)).join(' · ')}</span>
+           </div>`
+        : '';
+
+      // Dòng tóm tắt khách theo trạng thái — bấm mở modal xem danh sách đầy đủ (R6 Việc 2)
+      const statusCounts = {};
+      for (const o of tierOrders) statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
+      const custSummaryText = Object.entries(statusCounts).map(([st, c]) => `${c} ${st}`).join(' · ');
+      const custSummaryHTML = tierOrders.length > 0
+        ? `<div style="grid-column:1/-1;padding:2px 0 6px;font-size:0.73rem;cursor:pointer" onclick="openTierCustomers('${day}', ${ti})">
+             <span style="color:var(--text-muted)">👥 ${tierOrders.length} khách:</span>
+             <span style="color:var(--gold-primary)">${esc(custSummaryText)}</span>
+             <span style="color:var(--text-muted)"> ▸ xem</span>
            </div>`
         : '';
 
@@ -1415,11 +1433,47 @@ async function refreshInventory() {
             <span class="inventory-sub">còn lại</span>
           </div>
           ${seatHTML}
+          ${custSummaryHTML}
         </div>
       `;
     }
 
     container.innerHTML = headerHTML + rows;
+  }
+
+  // ===== Khách "ngày linh động" (flex) — chưa chốt ngày, cố tình không thuộc kho ngày nào =====
+  const flexCard = document.getElementById('inventory-flex-card');
+  const flexContainer = document.getElementById('inventory-flex');
+  if (flexCard && flexContainer) {
+    const flexOrders = allOrders.filter(o => o.show_day === 'flex' && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
+    if (flexOrders.length === 0) {
+      flexCard.classList.add('hidden');
+    } else {
+      flexCard.classList.remove('hidden');
+      const flexHeaderHTML = flexContainer.querySelector('.inventory-row.header')?.outerHTML || '';
+      let flexRows = '';
+      for (let ti = 0; ti < tiers.length; ti++) {
+        const tier = tiers[ti];
+        const tierFlexOrders = flexOrders.filter(o => o.ticket_tier === tier);
+        if (tierFlexOrders.length === 0) continue;
+        const statusCounts = {};
+        for (const o of tierFlexOrders) statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
+        const summaryText = Object.entries(statusCounts).map(([st, c]) => `${c} ${st}`).join(' · ');
+        flexRows += `
+          <div class="inventory-row" style="cursor:pointer" onclick="openTierCustomers('flex', ${ti})">
+            <div><span class="inventory-tier">${esc(tier)}</span></div>
+            <div>
+              <span class="inventory-number">${tierFlexOrders.length}</span>
+              <span class="inventory-sub">khách</span>
+            </div>
+            <div style="grid-column:3/-1;text-align:left">
+              <span style="font-size:0.75rem;color:var(--text-muted)">${esc(summaryText)} · ▸ xem</span>
+            </div>
+          </div>
+        `;
+      }
+      flexContainer.innerHTML = flexHeaderHTML + flexRows;
+    }
   }
 
   // Warnings
@@ -1434,6 +1488,40 @@ async function refreshInventory() {
   } else {
     warningsEl.innerHTML = '';
   }
+}
+
+// ===== MODAL: DANH SÁCH KHÁCH THEO HẠNG (R6 Việc 2) =====
+function openTierCustomers(day, tierIdx) {
+  const { allOrders, customerMap, tiers } = inventorySnapshot;
+  const tier = tiers[tierIdx];
+  if (!tier) return;
+
+  const orders = allOrders
+    .filter(o => o.ticket_tier === tier && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at
+      && (day === 'flex' ? o.show_day === 'flex' : (o.show_day === day || o.show_day === 'both')))
+    .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+
+  const bodyHTML = orders.length > 0
+    ? orders.map(o => {
+        const c = customerMap[o.customer_id];
+        return `
+          <div style="padding:8px 0;border-bottom:1px solid var(--border-subtle);font-size:0.85rem">
+            <strong>${esc(o.order_code)}</strong> · ${c ? esc(c.name) : 'N/A'}${c && c.phone ? ' · ' + esc(c.phone) : ''}<br>
+            ${esc(o.ticket_tier)} × ${o.quantity}
+            <span class="order-status" data-status="${o.status}" style="font-size:0.65rem">${esc(o.status)}</span>
+            ${o.seat_number ? `<br><span style="color:var(--text-gold)">💺 ${esc(o.seat_number)}</span>` : ''}
+            ${o.ctv ? `<span style="color:var(--accent-purple)"> · 👤 ${esc(o.ctv)}</span>` : ''}
+          </div>`;
+      }).join('')
+    : '<p style="color:var(--text-muted);padding:var(--space-md)">Chưa có khách nào.</p>';
+
+  document.getElementById('tier-customers-title').textContent = `${showDayLabel(day)} — ${tier} (${orders.length} khách)`;
+  document.getElementById('tier-customers-body').innerHTML = bodyHTML;
+  document.getElementById('tier-customers-modal').classList.add('active');
+}
+
+function closeTierCustomersModal() {
+  document.getElementById('tier-customers-modal').classList.remove('active');
 }
 
 // ===== INVENTORY MODAL =====

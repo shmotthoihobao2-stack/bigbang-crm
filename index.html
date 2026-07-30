@@ -296,6 +296,20 @@
           </div>
         </div>
 
+        <!-- Khách "ngày linh động" (flex) — chưa chốt ngày, ẩn nếu không có đơn nào -->
+        <div class="card mb-lg hidden" id="inventory-flex-card">
+          <div class="card-header">
+            <span class="card-title">🎟️ Khách chưa chốt ngày</span>
+          </div>
+          <div class="inventory-grid" id="inventory-flex">
+            <div class="inventory-row header">
+              <span>Hạng vé</span>
+              <span>Số khách</span>
+              <span style="grid-column:3/-1">Trạng thái</span>
+            </div>
+          </div>
+        </div>
+
         <button class="btn btn-secondary btn-block" onclick="openInventoryModal()">
           ✏️ Chỉnh sửa tồn kho
         </button>
@@ -885,6 +899,22 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
       <div class="modal-actions">
         <button class="btn btn-secondary" onclick="closeInventoryModal()">Hủy</button>
         <button class="btn btn-gold" onclick="saveInventory()">💾 Lưu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== -->
+  <!-- MODAL: KHÁCH THEO HẠNG (R6)     -->
+  <!-- ============================== -->
+  <div class="modal-overlay" id="tier-customers-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="tier-customers-title">Khách theo hạng</h3>
+        <button class="modal-close" onclick="closeTierCustomersModal()">✕</button>
+      </div>
+      <div id="tier-customers-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeTierCustomersModal()">Đóng</button>
       </div>
     </div>
   </div>
