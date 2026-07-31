@@ -427,19 +427,20 @@
         <div class="settings-section">
           <h3 class="settings-section-title">☁️ Đồng bộ cloud (Supabase)</h3>
           <p class="text-muted mb-md" style="font-size:0.8rem">
-            Nhập email + mật khẩu tài khoản Supabase là xong — URL và key đã được cài sẵn.
+            Nhập email + mật khẩu <strong>tài khoản Supabase</strong> (KHÁC mật khẩu đăng nhập app,
+            KHÁC mật khẩu email) là xong — URL và key đã được cài sẵn.
           </p>
           <!-- URL và Key đã hardcode trong sync.js — không cần nhập lại -->
           <input type="hidden" id="sb-url">
           <input type="hidden" id="sb-key">
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">Email đăng nhập</label>
+              <label class="form-label">Email tài khoản Supabase</label>
               <input type="email" class="form-input" id="sb-email" placeholder="shop@email.com">
             </div>
             <div class="form-group">
-              <label class="form-label">Mật khẩu</label>
-              <input type="password" class="form-input" id="sb-password" placeholder="••••••••">
+              <label class="form-label">Mật khẩu tài khoản Supabase</label>
+              <input type="password" class="form-input" id="sb-password" placeholder="Không phải mật khẩu app, không phải mật khẩu mail">
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
