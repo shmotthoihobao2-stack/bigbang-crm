@@ -125,8 +125,8 @@
         <div class="row"><span class="k">Hạng vé</span><span class="v" id="r-tier"></span></div>
         <div class="row"><span class="k">Số lượng</span><span class="v" id="r-qty"></span></div>
         <div class="row" id="row-seat" style="display:none"><span class="k">Số ghế</span><span class="v gold" id="r-seat"></span></div>
-        <div class="row"><span class="k">Tổng tiền</span><span class="v" id="r-total"></span></div>
-        <div class="row"><span class="k">Đã thanh toán</span><span class="v green" id="r-paid"></span></div>
+        <div class="row"><span class="k" id="k-total">Tổng tiền</span><span class="v" id="r-total"></span></div>
+        <div class="row"><span class="k" id="k-paid">Đã thanh toán</span><span class="v green" id="r-paid"></span></div>
         <div class="row" id="row-remain"><span class="k">Còn lại</span><span class="v red" id="r-remain"></span></div>
         <div class="row"><span class="k">Hình thức giao</span><span class="v" id="r-delivery"></span></div>
         <a class="zalo-btn" id="zalo-link" style="display:none" target="_blank" rel="noopener">💬 Liên hệ shop qua Zalo</a>
@@ -195,9 +195,22 @@
         } else {
           document.getElementById('row-seat').style.display = 'none';
         }
-        document.getElementById('r-total').textContent = fmt(o.total);
-
-        const paid = (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') ? o.total : (o.deposit_amount || 0);
+        // BẪY: nếu shop đổi status sang 'đã thanh toán đủ'/'đã giao vé' mà CHƯA kịp nhập đơn giá
+        // (total=0), công thức cũ lấy thẳng o.total -> khách tra cứu thấy "Đã thanh toán: 0đ",
+        // xoá sạch ghi nhận tiền cọc họ đã chuyển. Luôn lấy số LỚN HƠN giữa total và tiền cọc.
+        const fullyPaid = (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé');
+        const paid = fullyPaid ? Math.max(o.total || 0, o.deposit_amount || 0) : (o.deposit_amount || 0);
+        // Đơn GIỮ CHỖ (vé chưa mở bán -> chưa có đơn giá/tổng tiền): hiện "0đ" ở Tổng tiền trong khi
+        // Đã thanh toán = tiền cọc thật sẽ làm khách hoang mang (trả nhiều hơn tổng?). Đổi nhãn cho đúng bản chất.
+        if (!o.total) {
+          document.getElementById('k-total').textContent = 'Tổng tiền';
+          document.getElementById('r-total').textContent = 'Chốt khi BTC công bố giá';
+          document.getElementById('k-paid').textContent = 'Đã cọc giữ chỗ';
+        } else {
+          document.getElementById('k-total').textContent = 'Tổng tiền';
+          document.getElementById('r-total').textContent = fmt(o.total);
+          document.getElementById('k-paid').textContent = 'Đã thanh toán';
+        }
         document.getElementById('r-paid').textContent = fmt(paid);
         const remain = (o.total || 0) - paid;
         document.getElementById('row-remain').style.display = remain > 0 ? 'flex' : 'none';

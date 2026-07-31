@@ -363,7 +363,9 @@ body {
 .app-main {
   flex: 1;
   padding: var(--space-md);
-  padding-bottom: 80px; /* space for bottom nav */
+  /* Nav cao ~55px + safe-area iPhone (~34px) > 80px cũ -> nút "Tải thêm đơn" / "Chỉnh sửa tồn kho"
+     ở cuối trang bị thanh nav che mất một phần trên iPhone có notch. */
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
@@ -561,7 +563,9 @@ body {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  /* 16px BẮT BUỘC (không dùng rem/0.9rem): Safari iOS tự ZOOM vào mọi input < 16px và KHÔNG tự
+     zoom ra -> mỗi lần chạm ô nhập lại phải pinch thu nhỏ. Rất mệt khi vừa chat Zalo vừa nhập đơn. */
+  font-size: 16px;
   font-family: var(--font-body);
   outline: none;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
@@ -943,6 +947,9 @@ body {
 
 .modal-actions {
   display: flex;
+  /* flex-wrap BẮT BUỘC: modal chi tiết đơn nhét 7 nút (Đóng/Sửa/Bill/Email/Pass/Lịch sử/Xóa) vào đây,
+     thiếu wrap thì trên điện thoại 360px mỗi nút bị bóp còn ~40px, chữ tràn đè lên nhau. */
+  flex-wrap: wrap;
   gap: var(--space-sm);
   margin-top: var(--space-lg);
   padding-top: var(--space-md);
@@ -950,7 +957,8 @@ body {
 }
 
 .modal-actions .btn {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 110px;
 }
 
 /* ===== Follow-up Tab ===== */

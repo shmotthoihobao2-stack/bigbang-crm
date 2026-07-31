@@ -252,13 +252,16 @@ async function renderCTVs() {
   } else {
     container.innerHTML = ctvs.map(name => {
       const ctvOrders = orders.filter(o => o.ctv === name && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
-      const ctvRevenue = ctvOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+      // Đơn giữ chỗ chưa có total -> nếu chỉ cộng total thì CTV gom cả chục triệu tiền cọc vẫn hiện "0đ"
+      // (tính hoa hồng theo số này là trả nhầm). Chưa có giá thì lấy tiền cọc làm mốc tạm.
+      const ctvRevenue = ctvOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
+      const ctvIsProvisional = ctvOrders.some(o => !o.total && (o.deposit_amount || 0) > 0);
       return `
         <div class="ctv-card">
           <div class="ctv-avatar">${esc(name.charAt(0).toUpperCase())}</div>
           <div class="ctv-info">
             <div class="ctv-name">${esc(name)}</div>
-            <div class="ctv-stats">${ctvOrders.length} đơn — ${formatVND(ctvRevenue)}</div>
+            <div class="ctv-stats">${ctvOrders.length} đơn — ${formatVND(ctvRevenue)}${ctvIsProvisional ? ' <span style="color:var(--text-muted);font-size:0.7rem">(gồm cọc, chưa chốt giá)</span>' : ''}</div>
           </div>
           <button class="btn btn-sm btn-danger" data-name="${esc(name)}" onclick="removeCTV(this.dataset.name)">Xóa</button>
         </div>
@@ -326,7 +329,9 @@ function switchTab(tab) {
   // Refresh data on tab switch
   if (tab === 'dashboard') { refreshDashboard(); startCountdownAutoRefresh(); }
   else stopCountdownAutoRefresh();
-  if (tab === 'orders') { setStatusFilter('all'); refreshOrders(); }
+  // KHÔNG reset filter trạng thái khi quay lại tab: đang lọc "Đã cọc", nhảy qua Tồn kho xem vé
+  // rồi quay lại mà mất filter là phải chọn lại. (Ô tìm kiếm + filter ngày/hạng vốn đã được giữ.)
+  if (tab === 'orders') refreshOrders();
   if (tab === 'inventory') refreshInventory();
   if (tab === 'followup') refreshFollowup();
   if (tab === 'resale') refreshResales();
@@ -430,9 +435,17 @@ function maskName(name) {
   return parts.map((p, i) => i === parts.length - 1 ? p : p[0] + '*'.repeat(Math.max(0, p.length - 1))).join(' ');
 }
 
+// Chuẩn hóa SĐT: khách copy từ Zalo hay ra dạng +84912345678 / 84912345678 -> đổi về 0912345678
+// thay vì báo lỗi bắt gõ lại.
+function normalizePhone(phone) {
+  let cleaned = (phone || '').replace(/[\s\-\.\(\)]/g, '');
+  if (cleaned.startsWith('+84')) cleaned = '0' + cleaned.slice(3);
+  else if (cleaned.startsWith('84') && cleaned.length === 11) cleaned = '0' + cleaned.slice(2);
+  return cleaned;
+}
+
 function validatePhone(phone) {
-  const cleaned = phone.replace(/[\s\-\.]/g, '');
-  return /^0\d{9}$/.test(cleaned);
+  return /^0\d{9}$/.test(normalizePhone(phone));
 }
 
 // ===== GENERATE ORDER CODE =====
@@ -493,7 +506,8 @@ async function lookupCustomer(phone) {
   const badge = document.getElementById('phone-autofill-badge');
   badge.innerHTML = '';
 
-  const cleaned = phone.replace(/[\s\-\.]/g, '');
+  // Dùng chung normalizePhone với saveOrder: dán "+84912..." phải nhận ra ĐÚNG khách cũ lưu "0912..."
+  const cleaned = normalizePhone(phone);
   if (cleaned.length < 5) return;
 
   lookupTimeout = setTimeout(async () => {
@@ -510,7 +524,8 @@ async function lookupCustomer(phone) {
       const validOrders = orders.filter(o => !o.deleted_at && o.status !== 'hủy');
       
       if (validOrders.length > 0) {
-        const totalAmount = validOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+        // Đơn giữ chỗ chưa có total -> khách sộp nhất cũng hiện "0đ". Lấy cọc làm mốc khi chưa chốt giá.
+        const totalAmount = validOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
         badge.innerHTML = `<span class="autofill-badge" style="background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;margin-left:8px;font-size:0.75rem;">🌟 VIP: ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
       } else {
         badge.innerHTML = '<span class="autofill-badge">✓ Khách cũ</span>';
@@ -670,6 +685,12 @@ function openOrderModal(orderId) {
   }
 
   modal.classList.add('active');
+
+  // Tạo đơn mới -> nhảy thẳng vào ô SĐT (thao tác đầu tiên luôn là nhập SĐT khách).
+  // Không autofocus khi SỬA đơn: sẽ cuộn màn hình lên đầu, che mất trường đang muốn sửa.
+  if (!orderId) {
+    setTimeout(() => { const p = document.getElementById('order-phone'); if (p) p.focus(); }, 100);
+  }
 }
 
 async function loadOrderForEdit(orderId) {
@@ -769,7 +790,9 @@ async function sendTicketEmail(orderId) {
         show_day: showDayText,
         ticket_tier: order.ticket_tier,
         quantity: order.quantity,
-        total: formatVND(order.total),
+        // Đơn giữ chỗ (vé chưa mở bán): gửi "0đ" ra email cho khách trong khi họ đã cọc tiền thật
+        // là mâu thuẫn/mất uy tín -> gửi chữ rõ nghĩa thay vì con số 0.
+        total: order.total > 0 ? formatVND(order.total) : 'Chốt khi BTC công bố giá',
         deposit: formatVND(order.deposit_amount),
         status: order.status.toUpperCase(),
         seat_info: seatInfo,
@@ -806,7 +829,11 @@ async function copyMessageText(orderId) {
 async function saveOrder(e) {
   e.preventDefault();
 
-  const phone = document.getElementById('order-phone').value.replace(/[\s\-\.]/g, '');
+  // Chặn double-tap (xem khối try/finally quanh phần ghi DB bên dưới).
+  const submitBtn = e.target && e.target.querySelector ? e.target.querySelector('button[type="submit"]') : null;
+  if (submitBtn && submitBtn.disabled) return; // đang lưu dở -> bỏ qua lần bấm thứ 2
+
+  const phone = normalizePhone(document.getElementById('order-phone').value);
   const name = document.getElementById('order-name').value.trim();
   const zalo = document.getElementById('order-zalo').value.trim();
   const email = document.getElementById('order-email').value.trim();
@@ -859,9 +886,20 @@ async function saveOrder(e) {
     showToast(`Tiền cọc (${formatVND(deposit)}) lớn hơn tổng tiền (${formatVND(total)})!`, 'error');
     return;
   }
+  // Đơn giữ chỗ (chưa nhập đơn giá): guard trên bị vô hiệu vì total=0 -> gõ nhầm thừa số 0
+  // (40.000.000 thay vì 4.000.000) sẽ được nuốt im lặng, không có mốc nào đối chiếu.
+  // Không CHẶN (nhận cọc trước khi biết giá là đúng nghiệp vụ), chỉ cảnh báo khi số bất thường.
+  if (total === 0 && deposit >= 20000000) {
+    showToast(`⚠️ Cọc ${formatVND(deposit)} khá lớn mà chưa nhập đơn giá — kiểm tra lại số tiền`, 'warning');
+  }
 
   // Bọc try/catch quanh ghi DB: nếu lỗi (quota đầy, IndexedDB blocked...) phải BÁO user,
   // không để toast "đã lưu" im lặng không chạy -> tránh "tưởng đã lưu mà mất".
+  // Disable nút Lưu ĐÚNG trong khối này (không đặt ở đầu hàm): generateOrderCode() gọi mạng
+  // (rpc next_order_code) không timeout -> trên 3G bấm Lưu không thấy phản hồi, bấm lại là tạo
+  // 2 đơn trùng 2 mã khác nhau. finally đảm bảo LUÔN mở lại nút, kể cả khi ném lỗi.
+  const _btnText = submitBtn ? submitBtn.textContent : '';
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '⏳ Đang lưu...'; }
   try {
   // Save/update customer
   let customerId;
@@ -932,6 +970,9 @@ async function saveOrder(e) {
   } catch (err) {
     console.error('saveOrder', err);
     showToast('Lỗi lưu đơn vào máy: ' + (err && err.message ? err.message : err) + '. Đơn CHƯA được lưu!', 'error');
+  } finally {
+    // LUÔN mở lại nút — kể cả khi lỗi — nếu không nút kẹt "Đang lưu..." vĩnh viễn, không tạo được đơn nào nữa.
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = _btnText || '💾 Lưu đơn'; }
   }
 }
 
@@ -953,7 +994,7 @@ async function openDetailModal(orderId) {
     const custOrders = await db.orders.where('customer_id').equals(customer.id).toArray();
     const validOrders = custOrders.filter(o => !o.deleted_at && o.status !== 'hủy');
     if (validOrders.length > 0) {
-      const totalAmount = validOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+      const totalAmount = validOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
       vipHtml = `<br><span style="display:inline-block;margin-top:4px;background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;font-size:0.75rem;">🌟 Lịch sử: Đã mua ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
     }
   }
@@ -1271,7 +1312,13 @@ async function refreshOrders() {
       const nameMatch = c && c.name && c.name.toLowerCase().includes(search);
       const phoneMatch = c && c.phone && c.phone.includes(search);
       const codeMatch = o.order_code && o.order_code.toLowerCase().includes(search);
-      return nameMatch || phoneMatch || codeMatch;
+      // Tìm cả trong ghi chú / số ghế / nguồn vé / combo — khách hay nhắn "vé khu B hàng 3"
+      // hoặc "đơn combo Đà Nẵng" chứ không nhớ mã đơn.
+      const noteMatch = o.note && o.note.toLowerCase().includes(search);
+      const seatMatch = o.seat_number && o.seat_number.toLowerCase().includes(search);
+      const sourceMatch = o.ticket_source && o.ticket_source.toLowerCase().includes(search);
+      const comboMatch = o.combo_info && o.combo_info.toLowerCase().includes(search);
+      return nameMatch || phoneMatch || codeMatch || noteMatch || seatMatch || sourceMatch || comboMatch;
     });
   }
 
@@ -1310,7 +1357,9 @@ async function refreshOrders() {
             ${order.ctv ? '<br><span style="color:var(--accent-purple)">👤 ' + esc(order.ctv) + '</span>' : ''}
           </div>
           <div class="order-amount">
-            <div class="total">${formatVND(order.total)}</div>
+            ${order.total > 0
+              ? `<div class="total">${formatVND(order.total)}</div>`
+              : `<div class="total" style="font-size:0.8rem;color:var(--text-muted)">Chưa chốt giá</div>`}
             ${order.deposit_amount ? '<div class="deposit">Cọc: ' + formatVND(order.deposit_amount) + '</div>' : ''}
           </div>
         </div>
@@ -1684,11 +1733,15 @@ async function refreshFollowup() {
     container2.innerHTML = unpaid.map(order => {
       const c = customerMap[order.customer_id];
       const remaining = (order.total || 0) - (order.deposit_amount || 0);
+      // Đơn giữ chỗ chưa có tổng tiền -> "Thiếu" ra số âm, vô nghĩa. Hiện nhãn đúng bản chất thay vì số.
+      const remainLabel = order.total > 0
+        ? `💳 Thiếu ${formatVND(remaining)}`
+        : `💳 Đã cọc ${formatVND(order.deposit_amount || 0)} · chưa có giá`;
       return `
         <div class="order-card" onclick="openDetailModal(${order.id})">
           <div class="order-card-header">
             <span class="order-code">${order.order_code}</span>
-            <span style="display:flex;align-items:center;gap:6px">${c ? quickContactHTML(c.phone) : ''}<span style="color:var(--status-deposit);font-size:0.75rem">💳 Thiếu ${formatVND(remaining)}</span></span>
+            <span style="display:flex;align-items:center;gap:6px">${c ? quickContactHTML(c.phone) : ''}<span style="color:var(--status-deposit);font-size:0.75rem">${remainLabel}</span></span>
           </div>
           <div class="order-card-body">
             <div class="order-info">
@@ -1943,6 +1996,7 @@ async function generateBill(orderId) {
           <span class="label">Số ghế</span>
           <span class="value" style="color:#4fc3f7;font-weight:800">${esc(order.seat_number)}</span>
         </div>` : ''}
+        ${order.total > 0 ? `
         <div class="bill-row">
           <span class="label">Đơn giá</span>
           <span class="value">${formatVND(order.unit_price)}</span>
@@ -1951,7 +2005,6 @@ async function generateBill(orderId) {
           <span>Tổng cộng</span>
           <span>${formatVND(order.total)}</span>
         </div>
-        ${order.total > 0 ? `
         <div class="bill-row" style="border:none">
           <span class="label">Đã cọc</span>
           <span class="value" style="color:#66bb6a">${formatVND(order.deposit_amount)}</span>
@@ -1960,7 +2013,19 @@ async function generateBill(orderId) {
           <span class="label">Còn lại</span>
           <span class="value" style="color:#ef5350">${formatVND((order.total || 0) - (order.deposit_amount || 0))}</span>
         </div>
-        ` : ''}
+        ` : `
+        <!-- Đơn GIỮ CHỖ: chưa có đơn giá/tổng tiền (vé chưa mở bán). Tuyệt đối KHÔNG ẩn tiền cọc —
+             đó là bằng chứng thanh toán của khách, ẩn đi là mất uy tín/dễ tranh chấp. Cũng không hiện
+             "Tổng cộng 0đ" vì khách đọc sẽ tưởng đơn không có giá trị. -->
+        <div class="bill-total">
+          <span>Đã cọc giữ chỗ</span>
+          <span style="color:#66bb6a">${formatVND(order.deposit_amount)}</span>
+        </div>
+        <div class="bill-row" style="border:none">
+          <span class="label">Đơn giá</span>
+          <span class="value" style="color:#ffb74d">Chốt khi BTC công bố giá</span>
+        </div>
+        `}
         <div class="bill-row" style="border:none">
           <span class="label">Hình thức giao</span>
           <span class="value">${esc(order.delivery_method) || 'N/A'}</span>
@@ -2093,7 +2158,9 @@ async function exportCSV() {
 
   const data = orders.map(o => {
     const c = customerMap[o.customer_id];
-    const remaining = (o.total || 0) - (o.deposit_amount || 0);
+    // Đơn giữ chỗ (total=0, đã cọc>0) -> phép trừ ra ÂM, đọc trong Excel như "shop nợ khách". Kẹp về 0:
+    // chưa biết tổng tiền thì chưa xác định được còn thiếu bao nhiêu, không phải là thu vượt.
+    const remaining = Math.max(0, (o.total || 0) - (o.deposit_amount || 0));
     return {
       'Mã đơn': o.order_code,
       'Tên khách': c ? c.name : '',
@@ -2173,7 +2240,9 @@ async function exportCSV() {
       { 'Chỉ số': 'Đơn đã chốt', 'Giá trị': confirmed.length },
       { 'Chỉ số': 'Tổng doanh thu', 'Giá trị': sumRevenue },
       { 'Chỉ số': 'Tổng đã thu', 'Giá trị': sumReceived },
-      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': sumRevenue - sumReceived },
+      // Math.max(0,...): đơn giữ chỗ có total=0 nhưng đã cọc thật -> phép trừ ra ÂM (vd -60tr),
+      // file Excel này hay gửi kế toán/đối tác, số âm đọc như "shop nợ khách". Khớp với Dashboard.
+      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': Math.max(0, sumRevenue - sumReceived) },
       { 'Chỉ số': 'Đơn mới chưa chốt', 'Giá trị': orders.filter(o => o.status === 'mới').length },
       { 'Chỉ số': 'Đơn hủy/hoàn', 'Giá trị': orders.filter(o => o.status === 'hủy' || o.status === 'hoàn cọc').length },
     ];
@@ -2564,7 +2633,7 @@ async function passOrder(orderId) {
 let resaleLookupTimeout;
 async function lookupResaleCustomer(phone) {
   clearTimeout(resaleLookupTimeout);
-  const cleaned = phone.replace(/[\s\-\.]/g, '');
+  const cleaned = normalizePhone(phone);
   if (cleaned.length < 5) return;
   resaleLookupTimeout = setTimeout(async () => {
     const customer = await db.customers.where('phone').equals(cleaned).first();
@@ -2619,7 +2688,7 @@ async function saveResale(e) {
   e.preventDefault();
   const orderId = parseInt(document.getElementById('resale-order').value) || null;
   const name = document.getElementById('resale-name').value.trim();
-  const phone = document.getElementById('resale-phone').value.replace(/[\s\-\.]/g, '');
+  const phone = normalizePhone(document.getElementById('resale-phone').value);
   const day = document.getElementById('resale-day').value;
   const tier = document.getElementById('resale-tier').value;
   const qty = parseInt(document.getElementById('resale-qty').value) || 1;
