@@ -39,6 +39,34 @@ const RESALE_STATUSES = ['chờ rao', 'đang rao', 'đã pass', 'hủy ký gửi
 const RESALE_REASONS = ['không đi được', 'đổi hạng vé', 'khác'];
 const ACTIVE_STATUSES = ['đã cọc', 'đã thanh toán đủ', 'đã giao vé']; // count toward "sold"
 
+// ===== TIỀN — NGUỒN SỰ THẬT DUY NHẤT (R9 audit) =====
+// Trước bản vá này mỗi màn hình (Dashboard/Excel/CTV/badge VIP/lịch sử khách/biểu đồ) tự viết
+// lại công thức tiền -> lệch nhau ở đúng lúc đơn giữ chỗ (total=0, deposit_amount>0). Từ giờ
+// MỌI nơi cần "doanh thu 1 đơn"/"đã thu 1 đơn"/"còn thiếu 1 đơn" phải gọi 3 hàm này, không tự
+// viết `o.total` / `o.total || o.deposit_amount` nữa. Theo đúng mẫu soldFromOrders() (tồn kho)
+// vốn đã có 1 nguồn duy nhất và chưa từng lệch.
+
+// Doanh thu "đã chốt" của 1 đơn: đơn giữ chỗ (chưa có giá) tính TẠM theo tiền cọc thật đã nhận,
+// để không hiện "0đ" trong khi khách đã chuyển vài triệu. Khi có giá (total>0) thì total luôn đúng.
+function orderRevenue(o) {
+  return o.total > 0 ? o.total : (o.deposit_amount || 0);
+}
+
+// Tiền THỰC đã cầm trong tay của 1 đơn: đã TT đủ/đã giao vé -> full; còn lại (đã cọc/mới) -> đúng
+// bằng phần cọc đã nhận. Đơn giữ chỗ khi đổi sang "đã giao vé" KHÔNG được để cọc biến mất khỏi đây
+// (bug cũ: `o.total||0` = 0 vì chưa nhập giá) -> dùng orderRevenue() làm mốc tối thiểu.
+function orderReceived(o) {
+  if (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') return Math.max(o.total || 0, o.deposit_amount || 0);
+  return o.deposit_amount || 0;
+}
+
+// Còn phải thu của 1 đơn — LUÔN kẹp 0 ở tầng TỪNG ĐƠN (không phải trên tổng): đơn giữ chỗ
+// (total=0) sẽ luôn ra 0 ở đây (đúng bản chất "chưa xác định", không phải nợ âm), và số dương
+// của các đơn khác không bao giờ bị pha loãng bởi cọc "ảo" của đơn chưa chốt giá.
+function orderRemaining(o) {
+  return Math.max(0, (o.total || 0) - (o.deposit_amount || 0));
+}
+
 // Gom mảng record thành map theo id (thay 6 chỗ copy-paste {} + forEach giống hệt nhau)
 function toMap(arr) {
   const m = {};
@@ -252,9 +280,7 @@ async function renderCTVs() {
   } else {
     container.innerHTML = ctvs.map(name => {
       const ctvOrders = orders.filter(o => o.ctv === name && ACTIVE_STATUSES.includes(o.status) && !o.deleted_at);
-      // Đơn giữ chỗ chưa có total -> nếu chỉ cộng total thì CTV gom cả chục triệu tiền cọc vẫn hiện "0đ"
-      // (tính hoa hồng theo số này là trả nhầm). Chưa có giá thì lấy tiền cọc làm mốc tạm.
-      const ctvRevenue = ctvOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
+      const ctvRevenue = ctvOrders.reduce((sum, o) => sum + orderRevenue(o), 0);
       const ctvIsProvisional = ctvOrders.some(o => !o.total && (o.deposit_amount || 0) > 0);
       return `
         <div class="ctv-card">
@@ -524,8 +550,7 @@ async function lookupCustomer(phone) {
       const validOrders = orders.filter(o => !o.deleted_at && o.status !== 'hủy');
       
       if (validOrders.length > 0) {
-        // Đơn giữ chỗ chưa có total -> khách sộp nhất cũng hiện "0đ". Lấy cọc làm mốc khi chưa chốt giá.
-        const totalAmount = validOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
+        const totalAmount = validOrders.reduce((sum, o) => sum + orderRevenue(o), 0);
         badge.innerHTML = `<span class="autofill-badge" style="background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;margin-left:8px;font-size:0.75rem;">🌟 VIP: ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
       } else {
         badge.innerHTML = '<span class="autofill-badge">✓ Khách cũ</span>';
@@ -582,6 +607,12 @@ async function checkInventory() {
   let editingOrder = null;
   if (editId) editingOrder = await db.orders.get(editId);
 
+  // R9 audit: trước đây hàm chỉ so total_stock với số ĐÃ BÁN CŨ, không hề đọc Số lượng đang
+  // nhập trên form -> kho còn 3 vé, nhập đơn 10 vé vẫn không cảnh báo "vượt" (chỉ có nhánh "hết
+  // vé"/"còn ≤3" dựa trên tồn kho SẴN CÓ, không liên quan gì đến đơn đang gõ). Đọc thêm qty để
+  // so sánh đúng với đơn đang tạo/sửa.
+  const qty = parseInt(document.getElementById('order-qty')?.value) || 0;
+
   for (const d of days) {
     const inv = await db.inventory.where({ show_day: d, ticket_tier: tier }).first();
     // Không ôm vé: hạng để trống/0 = không giới hạn → bỏ qua cảnh báo
@@ -595,6 +626,10 @@ async function checkInventory() {
       if (remaining <= 0) {
         warningEl.classList.remove('hidden');
         warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Đã hết vé! (${sold}/${inv.total_stock})`;
+        return;
+      } else if (qty > remaining) {
+        warningEl.classList.remove('hidden');
+        warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Chỉ còn ${remaining} vé nhưng đang nhập ${qty} vé — vượt ${qty - remaining} vé!`;
         return;
       } else if (remaining <= 3) {
         warningEl.classList.remove('hidden');
@@ -994,7 +1029,7 @@ async function openDetailModal(orderId) {
     const custOrders = await db.orders.where('customer_id').equals(customer.id).toArray();
     const validOrders = custOrders.filter(o => !o.deleted_at && o.status !== 'hủy');
     if (validOrders.length > 0) {
-      const totalAmount = validOrders.reduce((sum, o) => sum + (o.total > 0 ? o.total : (o.deposit_amount || 0)), 0);
+      const totalAmount = validOrders.reduce((sum, o) => sum + orderRevenue(o), 0);
       vipHtml = `<br><span style="display:inline-block;margin-top:4px;background:var(--gold-primary);color:#000;font-weight:600;padding:2px 8px;border-radius:12px;font-size:0.75rem;">🌟 Lịch sử: Đã mua ${validOrders.length} đơn (${formatVND(totalAmount)})</span>`;
     }
   }
@@ -1045,9 +1080,9 @@ async function openDetailModal(orderId) {
         ${order.ticket_source ? '📦 Nguồn vé: <strong>' + esc(order.ticket_source) + '</strong><br>' : ''}
         ${order.combo_info ? '✈️ Combo: <strong>' + esc(order.combo_info) + '</strong><br>' : ''}
         💰 Đơn giá: ${formatVND(order.unit_price)}<br>
-        <strong>💎 Tổng: ${formatVND(order.total)}</strong><br>
+        <strong>💎 Tổng: ${order.total > 0 ? formatVND(order.total) : '<span style="color:var(--text-muted);font-weight:400">Chưa chốt giá</span>'}</strong><br>
         🏦 Đã cọc: ${formatVND(order.deposit_amount)}<br>
-        ${order.total > 0 ? '📊 Còn thiếu: ' + formatVND((order.total || 0) - (order.deposit_amount || 0)) + '<br>' : ''}
+        ${order.total > 0 ? '📊 Còn thiếu: ' + formatVND(orderRemaining(order)) + '<br>' : ''}
         🚚 ${esc(order.delivery_method) || 'N/A'}<br>
         ${order.ctv ? '👤 CTV: ' + esc(order.ctv) + '<br>' : ''}
         ${order.note ? '📝 ' + esc(order.note) + '<br>' : ''}
@@ -1207,7 +1242,7 @@ async function refreshTrash() {
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div>
             <strong>${esc(o.order_code)}</strong> — ${c ? esc(c.name) : 'N/A'}<br>
-            <span class="text-muted" style="font-size:0.75rem">${esc(o.ticket_tier)} × ${o.quantity} | ${formatVND(o.total)} | Còn ${daysLeft} ngày</span>
+            <span class="text-muted" style="font-size:0.75rem">${esc(o.ticket_tier)} × ${o.quantity} | ${o.total > 0 ? formatVND(o.total) : 'Chưa chốt giá'} | Còn ${daysLeft} ngày</span>
           </div>
           <button class="btn btn-sm btn-gold" onclick="restoreOrder(${o.id})">\u21A9\uFE0F Khôi phục</button>
         </div>
@@ -1217,14 +1252,16 @@ async function refreshTrash() {
 }
 
 async function restoreOrder(orderId) {
+  // R9 audit: deleteOrder() chỉ set deleted_at (GIỮ NGUYÊN status gốc, vd "đã cọc"). Bản cũ ở
+  // đây lại ép status='hủy' khi khôi phục -> đơn rớt khỏi ACTIVE_STATUSES -> mất khỏi "Đã thu"
+  // + tồn kho (ghế bị coi là còn trống -> bán chồng). Giờ chỉ xoá cờ deleted_at, trả nguyên vẹn.
   await db.orders.update(orderId, {
     deleted_at: null,
-    status: 'hủy',
     updated_at: new Date().toISOString()
   });
   await refreshTrash();
   await refreshAll();
-  showToast('Đã khôi phục đơn hàng! (Trạng thái: Hủy — anh đổi lại nếu cần)', 'success');
+  showToast('Đã khôi phục đơn hàng — trạng thái giữ nguyên như trước khi xoá!', 'success');
 }
 
 // Lưu snapshot bản ghi TRƯỚC khi xóa cứng -> còn khôi phục được (chống mất dữ liệu).
@@ -1254,10 +1291,18 @@ async function emptyTrash() {
 
 async function changeOrderStatus(orderId, newStatus) {
   const doChange = async () => {
-    await db.orders.update(orderId, {
-      status: newStatus,
-      updated_at: new Date().toISOString()
-    });
+    const fields = { status: newStatus, updated_at: new Date().toISOString() };
+    // R9 audit (phát hiện lúc verify, đã hỏi anh Quân — vá luôn): đánh dấu "đã thanh toán đủ"/
+    // "đã giao vé" qua nút nhanh này TRƯỚC ĐÂY không đụng deposit_amount -> nếu đơn đã chốt giá
+    // (total>0) mà cọc cũ < tổng, orderRemaining() vẫn hiện "Còn thiếu" số dương ngay cạnh badge
+    // đã trả đủ. Nâng deposit_amount lên = total khi đánh dấu đã thu đủ (không hạ nếu đã >= total).
+    if (newStatus === 'đã thanh toán đủ' || newStatus === 'đã giao vé') {
+      const order = await db.orders.get(orderId);
+      if (order && order.total > 0 && (order.deposit_amount || 0) < order.total) {
+        fields.deposit_amount = order.total;
+      }
+    }
+    await db.orders.update(orderId, fields);
     showToast(`Đã đổi trạng thái → ${newStatus}`, 'success');
     closeDetailModal();
     await refreshAll();
@@ -1717,7 +1762,9 @@ async function refreshFollowup() {
               ${order.seat_number ? '<br><span style="color:var(--text-gold)">💺 ' + esc(order.seat_number) + '</span>' : ''}
             </div>
             <div class="order-amount">
-              <div class="total">${formatVND(order.total)}</div>
+              ${order.total > 0
+                ? `<div class="total">${formatVND(order.total)}</div>`
+                : `<div class="total" style="font-size:0.8rem;color:var(--text-muted)">Chưa chốt giá</div>`}
             </div>
           </div>
         </div>
@@ -1732,7 +1779,7 @@ async function refreshFollowup() {
   } else {
     container2.innerHTML = unpaid.map(order => {
       const c = customerMap[order.customer_id];
-      const remaining = (order.total || 0) - (order.deposit_amount || 0);
+      const remaining = orderRemaining(order);
       // Đơn giữ chỗ chưa có tổng tiền -> "Thiếu" ra số âm, vô nghĩa. Hiện nhãn đúng bản chất thay vì số.
       const remainLabel = order.total > 0
         ? `💳 Thiếu ${formatVND(remaining)}`
@@ -1750,7 +1797,9 @@ async function refreshFollowup() {
               ${order.seat_number ? '<br><span style="color:var(--text-gold)">💺 ' + esc(order.seat_number) + '</span>' : ''}
             </div>
             <div class="order-amount">
-              <div class="total">${formatVND(order.total)}</div>
+              ${order.total > 0
+                ? `<div class="total">${formatVND(order.total)}</div>`
+                : `<div class="total" style="font-size:0.8rem;color:var(--text-muted)">Chưa chốt giá</div>`}
               <div class="deposit">Đã cọc: ${formatVND(order.deposit_amount)}</div>
             </div>
           </div>
@@ -1772,17 +1821,13 @@ async function refreshDashboard() {
   const totalOrders = confirmedOrders.length;
   const totalRevenue = confirmedOrders.reduce((s, o) => s + (o.total || 0), 0);
 
-  // Tiền THỰC đã thu: đơn TT đủ / đã giao => full; đơn mới cọc => phần cọc
-  const totalReceived = confirmedOrders.reduce((s, o) => {
-    if (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') return s + (o.total || 0);
-    return s + (o.deposit_amount || 0);
-  }, 0);
-  // "Còn phải thu" = Doanh thu - Đã thu. Nghiệp vụ thật: nhận cọc GIỮ CHỖ trước khi biết SL/giá vé
-  // (chưa mở bán) -> đơn để trống Số lượng/Đơn giá -> Tổng tiền = 0 nhưng Đã cọc > 0 -> phép trừ ra
-  // ÂM (vd -65,5tr), đọc như "nợ âm" rất dễ hiểu lầm dù về bản chất chỉ là Tổng tiền CHƯA XÁC ĐỊNH,
-  // không phải thu vượt. Chặn số âm ở đây (chỉ sửa HIỂN THỊ, giữ nguyên totalRevenue/totalReceived
-  // cho các chỗ tính khác) + cảnh báo riêng để anh biết có bao nhiêu đơn đang ở tình trạng này.
-  const totalRemaining = Math.max(0, totalRevenue - totalReceived);
+  // Tiền THỰC đã thu — dùng orderReceived() dùng chung (R9 audit: trước đây đơn giữ chỗ total=0
+  // khi đổi sang "đã giao vé" bị cộng `o.total||0` = 0, làm cọc đã nhận BAY khỏi con số này).
+  const totalReceived = confirmedOrders.reduce((s, o) => s + orderReceived(o), 0);
+  // "Còn phải thu" — cộng orderRemaining() TỪNG ĐƠN (R9 audit: bản cũ trừ TỔNG - TỔNG khiến cọc
+  // của 15 đơn chưa chốt giá bị đem trừ vào công nợ của các đơn ĐÃ chốt giá -> ra 0đ sai. Tính
+  // theo từng đơn thì đơn giữ chỗ (total=0) tự nhiên ra 0 — không pha loãng đơn khác).
+  const totalRemaining = confirmedOrders.reduce((s, o) => s + orderRemaining(o), 0);
   const depositOnlyOrders = confirmedOrders.filter(o => !o.total && (o.deposit_amount || 0) > 0);
   const missingTotalEl = document.getElementById('missing-total-warning');
   if (missingTotalEl) {
@@ -1801,6 +1846,11 @@ async function refreshDashboard() {
   let totalCost = 0;
   let missingCostCount = 0;
   for (const order of confirmedOrders) {
+    // R9 audit: totalRevenue (trên) chỉ cộng đơn ĐÃ có giá (total>0) — đơn giữ chỗ chưa vào đó.
+    // Trước đây vòng lặp này vẫn cộng VỐN của chính các đơn giữ chỗ đó -> Lợi nhuận = doanh thu
+    // (thiếu 15 đơn) - vốn (đủ cả 18 đơn) -> âm giả dù đang cầm tiền cọc thật. Bỏ qua đơn chưa
+    // chốt giá ở CẢ HAI vế cho tới khi anh nhập giá bán — khi đó tự động vào tính đủ.
+    if (!(order.total > 0)) continue;
     if (order.cost_price > 0) {
       totalCost += order.cost_price * (order.quantity || 0);
       continue;
@@ -2011,7 +2061,7 @@ async function generateBill(orderId) {
         </div>
         <div class="bill-row" style="border:none">
           <span class="label">Còn lại</span>
-          <span class="value" style="color:#ef5350">${formatVND((order.total || 0) - (order.deposit_amount || 0))}</span>
+          <span class="value" style="color:#ef5350">${formatVND(orderRemaining(order))}</span>
         </div>
         ` : `
         <!-- Đơn GIỮ CHỖ: chưa có đơn giá/tổng tiền (vé chưa mở bán). Tuyệt đối KHÔNG ẩn tiền cọc —
@@ -2160,7 +2210,7 @@ async function exportCSV() {
     const c = customerMap[o.customer_id];
     // Đơn giữ chỗ (total=0, đã cọc>0) -> phép trừ ra ÂM, đọc trong Excel như "shop nợ khách". Kẹp về 0:
     // chưa biết tổng tiền thì chưa xác định được còn thiếu bao nhiêu, không phải là thu vượt.
-    const remaining = Math.max(0, (o.total || 0) - (o.deposit_amount || 0));
+    const remaining = orderRemaining(o);
     return {
       'Mã đơn': o.order_code,
       'Tên khách': c ? c.name : '',
@@ -2232,17 +2282,16 @@ async function exportCSV() {
     // Tạo sheet Tổng hợp
     const confirmed = orders.filter(o => ACTIVE_STATUSES.includes(o.status));
     const sumRevenue = confirmed.reduce((s, o) => s + (o.total || 0), 0);
-    // Tiền THỰC thu: đơn đã TT đủ / đã giao = full; đơn mới cọc = phần cọc (khớp logic Dashboard)
-    const sumReceived = confirmed.reduce((s, o) =>
-      s + ((o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') ? (o.total || 0) : (o.deposit_amount || 0)), 0);
+    // R9 audit: dùng orderReceived()/orderRemaining() dùng chung — khớp CHÍNH XÁC với Dashboard
+    // (trước đây "Tổng còn thiếu" kẹp 0 trên TỔNG trong khi cột "Còn thiếu" từng dòng kẹp 0 theo
+    // TỪNG DÒNG -> 2 số tự mâu thuẫn trong cùng 1 file gửi kế toán).
+    const sumReceived = confirmed.reduce((s, o) => s + orderReceived(o), 0);
     const summaryData = [
       { 'Chỉ số': 'Tổng đơn hàng', 'Giá trị': orders.length },
       { 'Chỉ số': 'Đơn đã chốt', 'Giá trị': confirmed.length },
       { 'Chỉ số': 'Tổng doanh thu', 'Giá trị': sumRevenue },
       { 'Chỉ số': 'Tổng đã thu', 'Giá trị': sumReceived },
-      // Math.max(0,...): đơn giữ chỗ có total=0 nhưng đã cọc thật -> phép trừ ra ÂM (vd -60tr),
-      // file Excel này hay gửi kế toán/đối tác, số âm đọc như "shop nợ khách". Khớp với Dashboard.
-      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': Math.max(0, sumRevenue - sumReceived) },
+      { 'Chỉ số': 'Tổng còn thiếu', 'Giá trị': confirmed.reduce((s, o) => s + orderRemaining(o), 0) },
       { 'Chỉ số': 'Đơn mới chưa chốt', 'Giá trị': orders.filter(o => o.status === 'mới').length },
       { 'Chỉ số': 'Đơn hủy/hoàn', 'Giá trị': orders.filter(o => o.status === 'hủy' || o.status === 'hoàn cọc').length },
     ];
@@ -2416,119 +2465,13 @@ async function importAllData(event) {
   event.target.value = '';
 }
 
-// ===== SEED DATA =====
-function confirmSeedData() {
-  showConfirm('⚡ Tạo 10 đơn mẫu sẽ XÓA toàn bộ dữ liệu hiện tại. Tiếp tục?', seedData);
-}
-
-async function seedData() {
-  await db.customers.clear();
-  await db.orders.clear();
-  await db.inventory.clear();
-  await db.resales.clear();
-
-  // Ensure default tiers
-  await db.settings.put({ key: 'ticketTiers', value: JSON.stringify(DEFAULT_TIERS) });
-
-  // Seed inventory
-  const tiers = DEFAULT_TIERS;
-  const stockMap = {
-    'VIP Soundcheck': { stock: 10, cost: 8000000 },
-    'VIP': { stock: 20, cost: 5500000 },
-    'CAT1': { stock: 30, cost: 3500000 },
-    'CAT2': { stock: 40, cost: 2200000 },
-    'CAT3': { stock: 50, cost: 1200000 },
-  };
-
-  for (const day of ['day1', 'day2']) {
-    for (const tier of tiers) {
-      const info = stockMap[tier] || { stock: 20, cost: 2000000 };
-      await db.inventory.add({
-        uuid: genUUID(),
-        show_day: day,
-        ticket_tier: tier,
-        total_stock: info.stock,
-        cost_price: info.cost,
-        updated_at: new Date().toISOString(),
-      });
-    }
-  }
-
-  // Seed customers & orders
-  const seedCustomers = [
-    { name: 'Nguyễn Minh Anh', phone: '0901234567', zalo: '0901234567', social: '', source: 'zalo' },
-    { name: 'Trần Thị Bảo Ngọc', phone: '0912345678', zalo: 'zalo.me/0912345678', social: 'threads/@baongoc', source: 'threads' },
-    { name: 'Lê Hoàng Phúc', phone: '0923456789', zalo: '0923456789', social: '', source: 'fb_group' },
-    { name: 'Phạm Quỳnh Như', phone: '0934567890', zalo: '0934567890', social: 'fb.com/quynhnhu', source: 'fb_group' },
-    { name: 'Vũ Đức Thắng', phone: '0945678901', zalo: '', social: 'threads/@ducthang', source: 'threads' },
-    { name: 'Hoàng Yến Nhi', phone: '0956789012', zalo: '0956789012', social: '', source: 'zalo' },
-    { name: 'Đặng Tuấn Kiệt', phone: '0967890123', zalo: '0967890123', social: '', source: 'referral' },
-    { name: 'Bùi Thanh Hằng', phone: '0978901234', zalo: '0978901234', social: 'fb.com/thanhhang', source: 'fb_group' },
-    { name: 'Ngô Khánh Linh', phone: '0989012345', zalo: '', social: 'threads/@khanhlinh', source: 'threads' },
-    { name: 'Mai Xuân Đạt', phone: '0990123456', zalo: '0990123456', social: '', source: 'zalo' },
-  ];
-
-  const priceMap = {
-    'VIP Soundcheck': 12000000,
-    'VIP': 8000000,
-    'CAT1': 5000000,
-    'CAT2': 3500000,
-    'CAT3': 2000000,
-  };
-
-  const seedOrders = [
-    { ci: 0, day: 'day1', tier: 'VIP Soundcheck', qty: 2, status: 'đã thanh toán đủ', deposit: 24000000, delivery: 'giao tận tay', hoursAgo: 72 },
-    { ci: 1, day: 'day2', tier: 'VIP', qty: 1, status: 'đã cọc', deposit: 2500000, delivery: 'gửi ship', hoursAgo: 48, note: 'Ship về Đà Nẵng' },
-    { ci: 2, day: 'both', tier: 'CAT1', qty: 2, status: 'đã cọc', deposit: 3000000, delivery: 'nhận tại sân', hoursAgo: 36 },
-    { ci: 3, day: 'day1', tier: 'CAT2', qty: 3, status: 'mới', deposit: 0, delivery: 'giao tận tay', hoursAgo: 30 },
-    { ci: 4, day: 'day2', tier: 'CAT3', qty: 2, status: 'đã giao vé', deposit: 4000000, delivery: 'e-ticket', hoursAgo: 96 },
-    { ci: 5, day: 'day1', tier: 'VIP', qty: 1, status: 'đã cọc', deposit: 2000000, delivery: 'giao tận tay', hoursAgo: 60 },
-    { ci: 6, day: 'day1', tier: 'CAT1', qty: 4, status: 'mới', deposit: 0, delivery: 'giao tận tay', hoursAgo: 26, note: 'Nhóm bạn, đợi xác nhận' },
-    { ci: 7, day: 'day2', tier: 'VIP Soundcheck', qty: 1, status: 'đã thanh toán đủ', deposit: 12000000, delivery: 'giao tận tay', hoursAgo: 120 },
-    { ci: 8, day: 'day1', tier: 'CAT2', qty: 2, status: 'hủy', deposit: 0, delivery: 'giao tận tay', hoursAgo: 48 },
-    { ci: 9, day: 'both', tier: 'VIP', qty: 2, status: 'đã cọc', deposit: 5000000, delivery: 'gửi ship', hoursAgo: 12, note: 'Khách VIP, chăm sóc kỹ' },
-  ];
-
-  // Add customers
-  const customerIds = [];
-  for (const c of seedCustomers) {
-    const id = await db.customers.add({ ...c, uuid: genUUID(), note: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-    customerIds.push(id);
-  }
-
-  // Add orders
-  for (let i = 0; i < seedOrders.length; i++) {
-    const s = seedOrders[i];
-    const unitPrice = priceMap[s.tier] || 3000000;
-    const total = unitPrice * s.qty;
-    const created = new Date(Date.now() - s.hoursAgo * 60 * 60 * 1000).toISOString();
-
-    await db.orders.add({
-      uuid: genUUID(),
-      order_code: 'BB-' + String(i + 1).padStart(4, '0'),
-      customer_id: customerIds[s.ci],
-      show_day: s.day,
-      ticket_tier: s.tier,
-      quantity: s.qty,
-      unit_price: unitPrice,
-      total,
-      deposit_amount: s.deposit,
-      status: s.status,
-      payment_proof: '',
-      delivery_method: s.delivery,
-      ctv: '',
-      note: s.note || '',
-      created_at: created,
-      updated_at: created,
-    });
-  }
-
-  await db.settings.put({ key: 'orderCounter', value: '10' });
-
-  await renderTiers();
-  await refreshAll();
-  showToast('Đã tạo 10 đơn mẫu + tồn kho demo!', 'success');
-}
+// R9 audit (31/07/2026): gỡ hẳn "Tạo dữ liệu mẫu" — app đã có 18 đơn tiền thật, nút demo này
+// là mìn đặt cạnh dữ liệu thật: db.customers/orders/inventory/resales.clear() không bắn hook
+// enqueue (Table.clear() bỏ qua hook 'deleting') nên KHÔNG có gì báo cho outbox biết vừa mất dữ
+// liệu; pruneCloudOrphansAfterImport() chỉ được gọi sau Import chứ không sau seedData -> ≤30s
+// sau, pullAll() kéo NGƯỢC 18 đơn thật từ cloud về trộn lẫn 10 đơn ảo, đồng thời đẩy 10 đơn ảo
+// lên cloud lan sang máy kia. Cộng thêm orderCounter bị ép về '10' -> đơn tạo offline sau đó có
+// thể trùng mã với đơn thật (BB-0011...). Không còn lý do giữ nút này ở giai đoạn production.
 
 // ===================================================================
 // PASS VÉ / KÝ GỬI — khách nhờ shop bán lại vé (không đi được / đổi hạng)
