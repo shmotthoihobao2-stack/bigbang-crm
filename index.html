@@ -545,13 +545,6 @@ Bên mình làm việc minh bạch nên:
 Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
           </div>
         </div>
-
-        <!-- Seed data -->
-        <div class="settings-section">
-          <h3 class="settings-section-title">🧪 Dữ liệu mẫu</h3>
-          <button class="btn btn-danger" onclick="confirmSeedData()">⚡ Tạo 10 đơn mẫu (demo)</button>
-          <p class="form-hint mt-sm">Sẽ xóa toàn bộ dữ liệu hiện tại và thay bằng dữ liệu demo.</p>
-        </div>
       </div>
     </main>
 
@@ -644,7 +637,7 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Số lượng</label>
-            <input type="number" class="form-input" id="order-qty" value="1" min="1" required oninput="calcTotal()">
+            <input type="number" class="form-input" id="order-qty" value="1" min="1" required oninput="calcTotal();checkInventory()">
           </div>
           <div class="form-group">
             <label class="form-label">Đơn giá (VNĐ)</label>

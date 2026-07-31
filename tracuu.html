@@ -226,6 +226,15 @@
     }
     document.getElementById('last4').addEventListener('keydown', e => { if (e.key === 'Enter') lookup(); });
     document.getElementById('code').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('last4').focus(); });
+
+    // R9 audit: bill (app.js) sinh QR trỏ tới tracuu.html?code=BB-00xx nhưng trang này trước đây
+    // không đọc query string -> quét QR xong khách vẫn phải tự gõ lại mã, QR coi như vô dụng.
+    // Chỉ tự điền mã đơn (không tự tra cứu) — vẫn bắt khách gõ 4 số cuối SĐT để xác thực chính chủ.
+    const _qCode = new URLSearchParams(window.location.search).get('code');
+    if (_qCode) {
+      document.getElementById('code').value = _qCode;
+      document.getElementById('last4').focus();
+    }
   </script>
 </body>
 </html>
