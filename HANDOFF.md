@@ -1,5 +1,5 @@
 # 🤖 BÀN GIAO DỰ ÁN — BigBang CRM
-> Cập nhật lần cuối: 17/06/2026 ICT
+> Cập nhật lần cuối: 31/07/2026 ICT (Round 9)
 > Tài liệu này dành cho AGENT MỚI tiếp nhận dự án. Đọc KỸ trước khi làm bất kỳ gì.
 
 ---
@@ -16,7 +16,7 @@
 
 | Hạng mục | Chi tiết |
 |---|---|
-| **Điểm đánh giá** | 9.0/10 |
+| **Điểm đánh giá** | 6/10 audit code-level R9 (31/07) — P0+P1 đã vá + `node --check` sạch + test thuần cho 3 hàm tiền, nhưng **CHƯA verify LIVE trên điện thoại/2 máy/Supabase Dashboard thật** (agent không có trình duyệt). Đừng nâng điểm cho tới khi chạy hết mục VERIFY trong `~/.claude/plans/giggly-riding-dusk.md`. |
 | **Số tính năng** | 16 (hoàn chỉnh) |
 | **URL Production** | https://shmotthoihobao2-stack.github.io/bigbang-crm/ |
 | **Repo** | https://github.com/shmotthoihobao2-stack/bigbang-crm (Public) |
@@ -68,7 +68,51 @@ Realtime → Supabase postgres_changes → pullAll() → Toast notification
 - **Email gửi:** `vebigbang2026@gmail.com`
 
 ### Lưu ý bảo mật
-- Supabase anon key là PUBLIC KEY, an toàn để commit (Supabase thiết kế như vậy)
+- **R9 (31/07/2026): RLS đổi từ `to authenticated using(true)` sang `using(is_owner())`.** Trước đây
+  BẤT KỲ ai tự `POST /auth/v1/signup` (đăng ký công khai — xác nhận LIVE `disable_signup:false`
+  qua `GET /auth/v1/settings`) là có toàn quyền SELECT/UPDATE/DELETE cả 5 bảng, vì anon key public.
+  Giờ có bảng `app_owner` (0 policy — không ai SELECT/INSERT trực tiếp được) + hàm `is_owner()`/
+  `claim_owner()` (security definer): tài khoản authenticated ĐẦU TIÊN gọi `claim_owner()` sau khi
+  chạy `supabase-setup.sql` được khoá làm chủ vĩnh viễn, mọi policy chỉ đúng người đó mới `true`.
+  `sync.js` tự gọi `claim_owner()` mỗi lần đăng nhập cloud thành công (no-op nếu đã có chủ).
+  **BẮT BUỘC làm thêm ở Supabase Dashboard (agent không có quyền làm hộ):** (1) Authentication →
+  Users xác nhận chỉ có đúng email chủ shop; (2) Authentication → tắt "Allow new users to sign up";
+  (3) chạy lại `supabase-setup.sql` trong SQL Editor; (4) mở app, đăng xuất/đăng nhập cloud 1 lần.
+
+### ⚠️ 3 BÀI HỌC TRIỂN KHAI (R9 — trả giá bằng 3 lần vá lại, ĐỌC TRƯỚC KHI ĐỤNG QUYỀN/SCHEMA)
+1. **`revoke ... from public` KHÔNG chặn được `anon`/`authenticated` trên Supabase.** Project cấp
+   EXECUTE trực tiếp cho 2 role đó (ALTER DEFAULT PRIVILEGES tầng project), không đi qua PUBLIC.
+   Bằng chứng: sau khi revoke-from-public, gọi `next_order_code()` bằng anon key vẫn trả `BB-0022`.
+   → Phải `revoke all ... from public, anon, authenticated;` rồi mới `grant` lại đúng role cần.
+2. **Deploy CODE trước, SQL sau** (hoặc chuẩn bị đường lùi trước khi đổi quyền). R9 làm ngược: đổi
+   RLS sang `is_owner()` trong khi `sync.js` gọi `claim_owner()` chưa push → `app_owner` rỗng →
+   `is_owner()` false cho MỌI người → chính chủ bị khoá khỏi cloud. Có sẵn `ROLLBACK_RLS.sql` để gỡ.
+3. **Đụng tới quyền thì đọc `pg_policies` TRƯỚC — không tin file setup.** Bucket ảnh bill có 4 policy
+   `Cho phep upload 1jmfb48_0..3` tạo tay qua Dashboard, không hề nằm trong `supabase-setup.sql`.
+   Postgres nối policy bằng **HOẶC** → thêm 1 policy chặt không có tác dụng nếu còn policy lỏng.
+   → Luôn `select * from pg_policies where tablename='<bảng>'` để thấy toàn cảnh trước khi thêm.
+4. **Chấm sync đỏ sau sự cố quyền = dư âm, không phải lỗi mới.** `updateSyncStatus` kiểm `parked > 0`
+   TRƯỚC mọi điều kiện khác (`sync.js`), nên outbox bị park trong lúc mất quyền sẽ giữ chấm đỏ vĩnh
+   viễn dù RLS đã đúng. Sửa: Cài đặt → "☁️⬆️ Đồng bộ lại toàn bộ" (`forceSyncAll` gỡ cờ park).
+   Triệu chứng ≠ nguyên nhân — suýt chạy rollback gỡ bỏ hàng rào đang hoạt động tốt.
+
+### Review độc lập bằng Gemini Pro (31/07) — 2/3 xử lý, 1/3 bác bỏ có lý do
+1. ✅ **Đúng, đã vá**: `pullAll()` không kiểm cờ `reconciling` (bất đối xứng — `reconcile()` có kiểm
+   `pulling` để nhường, chiều ngược lại thì không) → 2 luồng có thể ghi/đẩy IndexedDB chồng nhau nếu
+   interval 30s/`online`/`visibilitychange` bắn đúng lúc "Đồng bộ lại toàn bộ" đang chạy. Vá:
+   `if (_pullBusy || reconciling) return;`. Bug có từ trước R9, không phải do đợt vá này gây ra.
+2. ⚠️ **Đúng về nguyên lý, SAI về hiện trạng**: cảnh báo script dọn policy `LIKE '%payment_proofs%'`
+   có thể bỏ sót 1 policy "mù" kiểu `using(true)` không nhắc tên bucket. Đã tự verify LIVE bằng
+   `select * from pg_policies where tablename='objects'` KHÔNG lọc gì — hiện tại chỉ có đúng 1
+   policy (`pp_owner_all`), không có policy mù nào. Vẫn hardening script (dọn sạch toàn bộ trừ
+   `pp_owner_all`, xác nhận qua grep dự án chỉ có 1 bucket) để lần chạy lại sau này an toàn hơn.
+3. ❌ **Bác bỏ**: đề xuất reset `_lastPullOk = true` khi `processOutbox`/`reconcile` thành công.
+   KHÔNG áp dụng — sẽ tái tạo lại đúng lỗi P0 vừa vá (push OK mà pull vẫn hỏng thì bị che thành
+   xanh giả). Thiết kế hiện tại đã đúng: `online`/`visibilitychange`/interval 30s tự gọi lại
+   `pullAll` nên cờ tự lành trong ~30s nếu pull thật sự thông; nếu không tự lành nghĩa là pull
+   đang thật sự có vấn đề — hiện đỏ là ĐÚNG, không phải bug.
+- Supabase anon key là PUBLIC KEY, an toàn để commit (Supabase thiết kế như vậy) — **NHƯNG chỉ an
+  toàn khi RLS pin đúng 1 chủ như trên**, không phải vì bản thân key vô hại.
 - Mật khẩu CRM lưu **dạng hash SHA-256** trong IndexedDB (không phải plaintext)
 - Service Worker đã bị VÔ HIỆU HÓA (sw.js chỉ để tương thích cũ)
 - **Ảnh chuyển khoản (payment_proofs): bucket PRIVATE** — `payment_proof` lưu PATH (không phải URL), xem qua signed URL tạm 1h (`window.getSignedProofUrl` ở sync.js). Đổi private cần chạy lại `supabase-setup.sql` trên Supabase (đã idempotent: ép `public=false` + drop policy `pp_public_read`).
@@ -103,6 +147,9 @@ db.version(5).stores({
 - `inventory`
 - `resales`
 - `app_settings` — key-value store cho settings đồng bộ
+- `app_owner` (R9, 31/07) — bảng singleton `{id: true, uid}`, **0 RLS policy** (kể cả authenticated
+  cũng không SELECT/INSERT trực tiếp được, chỉ 2 hàm security definer `claim_owner()`/`is_owner()`
+  chạm vào được). Đây là chốt chặn thay cho `using(true)` cũ — xem mục 4.
 
 ## 6. CÁC FILE QUAN TRỌNG VÀ CHỨC NĂNG
 
@@ -143,7 +190,9 @@ db.version(5).stores({
 | 17/06 | Round 4 | Bảo mật: bucket payment_proofs PUBLIC→PRIVATE + signed URL; backup redact secret (không còn hash pw/email Supabase) |
 | 02/07 | Round 5 | Audit Principal Architect (3 agent + verify chéo). Fix 7 việc — (P0) `lookup_order` guard null-phone+length (chống lộ đơn khách không SĐT); (P1) `refreshInventory` batch-load orders 1 lần thay ~20 query N+1; (P1) validate creds Supabase TRƯỚC khi lưu DB; (P2) realtime auto re-subscribe backoff + generation guard; (P2) toast khi load connect fail; (P3) `.catch()` populateCTVSelect; (P3) hint mật khẩu không nhúng HTML (JS chèn khi còn default). Bác 7 false-positive. **⚠️ Cần chạy lại `supabase-setup.sql` live cho P0.** |
 | 30/07 | Round 6 | **Ngày linh động (`show_day='flex'`)**: 1 vé chưa chốt ngày, khác `both` (2 vé). Soát bằng 2 agent + verify tay trước khi code — phát hiện rủi ro mất dữ liệu (4 chỗ `select.value = show_day` fail-silent nếu thiếu `<option>`) và 2 chỗ ternary hardcode gửi sai "Cả 2 ngày" ra email/Zalo cho khách — cả 2 đã fix. **Bảng khách theo hạng vé** trong tab Tồn kho: dòng tóm tắt (đếm theo trạng thái) + modal chi tiết khi bấm, card riêng cho đơn `flex` (tự ẩn nếu rỗng). Không đổi schema, không cần chạy SQL, không bump Dexie version. |
-| 30/07 | Round 7 (audit) | **Audit tổng thể 3 agent song song + tự verify tay từng phát hiện nặng.** Vá 2 lỗi P0 THẬT: (1) `pullAll` thiếu `deleted_at:null` ở 4 nhánh merge → nút "Khôi phục" Thùng rác vô hiệu khi dùng 2 máy (đơn tự chui lại thùng rác, xóa cứng sau 30 ngày); (2) import backup âm thầm reset mật khẩu app về mặc định công khai → giữ key `password`/`supabaseEmail`/... qua import. **⚠️ Lỗi P0 thứ 3 báo trong audit ("cache-bust `?v=` đứng yên 6 tuần") là FALSE POSITIVE** — `deploy.yml` đã tự inject commit SHA từ 14/06, live luôn đúng bản mới (verify: `curl -s <URL> | grep -o '?v='` ra `0c93721f` khớp commit). Bài học: verify nửa chừng (chỉ đọc `git log -- index.html`, không đọc pipeline deploy) thì kết luận sai — xem quy tắc #5 mục 6. Vá 5 P1/P2: esc(tier) sót ở cảnh báo bán vượt, cảnh báo đơn mang hạng đã xóa khỏi Settings, biểu đồ doanh thu đồng bộ `ACTIVE_STATUSES` với stat card, trục X biểu đồ gom theo ngày thật (không sort chuỗi dd/mm), card flex đếm vé thay vì đơn, mục "đã cọc chưa TT đủ" thêm ngưỡng tuổi đơn, Thùng rác auto-refresh ở tab Cài đặt, `_pullBusy` chống pullAll chạy chồng gây nhân đôi đơn, `pruneCloudOrphansAfterImport()` dọn cloud sau import. **Còn tồn (ghi nhận, chưa vá — round riêng nếu cần):** index `uuid` không unique (cần bump Dexie v6+dedupe), mã đơn tuần tự dò được qua `lookup_order` (rate-limit), tài liệu `.md` còn nhiều chỗ lệch code thật. |
+| 30/07 | Round 7 (audit) | **Audit tổng thể 3 agent song song + tự verify tay từng phát hiện nặng.** Vá 2 lỗi P0 THẬT: (1) `pullAll` thiếu `deleted_at:null` ở 4 nhánh merge → nút "Khôi phục" Thùng rác vô hiệu khi dùng 2 máy (đơn tự chui lại thùng rác, xóa cứng sau 30 ngày); (2) import backup âm thầm reset mật khẩu app về mặc định công khai → giữ key `password`/`supabaseEmail`/... qua import. **⚠️ Lỗi P0 thứ 3 báo trong audit ("cache-bust `?v=` đứng yên 6 tuần") là FALSE POSITIVE** — `deploy.yml` đã tự inject commit SHA từ 14/06, live luôn đúng bản mới (verify: `curl -s <URL> | grep -o '?v='` ra `0c93721f` khớp commit). Bài học: verify nửa chừng (chỉ đọc `git log -- index.html`, không đọc pipeline deploy) thì kết luận sai — xem quy tắc #5 mục 6. Vá 5 P1/P2: esc(tier) sót ở cảnh báo bán vượt, cảnh báo đơn mang hạng đã xóa khỏi Settings, biểu đồ doanh thu đồng bộ `ACTIVE_STATUSES` với stat card, trục X biểu đồ gom theo ngày thật (không sort chuỗi dd/mm), card flex đếm vé thay vì đơn, mục "đã cọc chưa TT đủ" thêm ngưỡng tuổi đơn, Thùng rác auto-refresh ở tab Cài đặt, `_pullBusy` chống pullAll chạy chồng gây nhân đôi đơn, `pruneCloudOrphansAfterImport()` dọn cloud sau import. |
+| 30/07 | Round 8 (hotfix P0 phát sinh sau R7) | **Fix hotfix restore vẫn hỏng sau R7**: cả 4 nhánh soft-delete trong `pullAll` thiếu SO SÁNH THỜI GIAN (chỉ check `!local.deleted_at`) → pull chạy xen giữa lúc outbox debounce 1.5s đọc phải cloud CŨ → tự xoá lại bản vừa khôi phục TRÊN CHÍNH MÁY vừa bấm. **Phát hiện + fix lớp lỗi "đơn giữ chỗ" (`total=0`, `deposit_amount>0` — 15/18 đơn thật lúc đó)**: bill/email/tracuu.html/modal/dashboard/Excel/followup — 8 vị trí hiện "0đ" hoặc nuốt mất tiền cọc thay vì "Chốt khi BTC công bố giá". Root cause: R6 trở về trước ngầm giả định "đơn luôn có total>0", sai với nghiệp vụ nhận cọc giữ chỗ trước khi mở bán. Kèm: `normalizePhone()`/`validatePhone()`, double-tap guard nút Lưu (đặt ĐÚNG trong try/finally hiện có, không phải đầu hàm — có 7 early-return), tìm kiếm thêm ghi chú/số ghế/nguồn vé, label ô mật khẩu Supabase chống nhầm mk mail/app. Đây là **class lỗi lớn nhất khoá học rút ra**: audit theo cấu trúc code không đủ — phải audit từ HÌNH DẠNG DỮ LIỆU THẬT (xem `~/.claude/PATTERNS.md §A57`). |
+| 31/07 | Round 9 (audit + vá P0+P1) | **Audit lần 3 (3 agent song song theo 8 trụ cột) + tự verify tay + 1 curl LIVE vào chính Supabase.** 6 lỗi P0: (1) **RLS `using(true)` + đăng ký công khai đang MỞ** (xác nhận LIVE `GET /auth/v1/settings` → `disable_signup:false`) = bất kỳ ai tự signup là có toàn quyền 5 bảng — vá bằng bảng `app_owner` + hàm `is_owner()`/`claim_owner()` (security definer, pin đúng 1 UID, xem mục 4); (2) đổi "đã giao vé" làm cọc BAY khỏi "Tiền thực đã thu" khi `total=0` (fix bằng `orderReceived()`); (3) Lợi nhuận tạm tính ra ÂM giả vì cộng vốn nhưng không cộng doanh thu của đúng các đơn giữ chỗ đó; (4) chấm đồng bộ báo XANH dù `pullAll` vừa lỗi thật (`finally{}` ghi đè mất `updateSyncStatus('error')` — vá bằng cờ `_lastPullOk`); (5) Khôi phục từ Thùng rác ép `status:'hủy'`, xoá mất trạng thái gốc; (6) gỡ hẳn nút "Tạo dữ liệu mẫu" (mìn cạnh 18 đơn tiền thật — `Table.clear()` không bắn hook enqueue, seedData không gọi `pruneCloudOrphansAfterImport`). Trích **3 hàm tiền dùng chung `orderRevenue/orderReceived/orderRemaining`** (app.js đầu file) — nguồn sự thật duy nhất, thay thế toàn bộ công thức tự viết lại ở CTV/badge VIP/lịch sử khách/Dashboard/Excel (fix luôn Excel tự mâu thuẫn: cột "Còn thiếu" kẹp 0 theo dòng vs ô "Tổng còn thiếu" kẹp 0 trên tổng). 4 lỗi P1: 4 chỗ còn hiện "0đ" cho đơn giữ chỗ (modal chi tiết + 2 card followup + Thùng rác), QR trên bill trỏ `tracuu.html?code=` nhưng trang không đọc query string (thêm `URLSearchParams`), `checkInventory()` không trigger khi đổi Số lượng VÀ không so với số đang nhập (chỉ so tồn kho sẵn có) — vá cả 2. Verify: `node --check` sạch + test thuần Node cho 3 hàm tiền (8/8 kịch bản PASS, xem `~/.claude/plans/giggly-riding-dusk.md`). **CHƯA verify LIVE** (agent không có trình duyệt) — cần anh tự chạy mục VERIFY trong plan trước khi tin điểm số. **Phát hiện mới lúc verify, đã hỏi anh Quân và VÁ LUÔN**: `changeOrderStatus()` giờ tự nâng `deposit_amount` lên bằng `total` khi đánh dấu "đã thanh toán đủ"/"đã giao vé" (chỉ nâng, không hạ nếu đã ≥ total) — trước đó nếu đơn đã chốt giá mà cọc cũ < tổng, "Còn thiếu" vẫn hiện số dương ngay cạnh badge "ĐÃ THANH TOÁN ĐỦ". 6 mục P2 ghi nhận, chưa vá (xem plan): `removeTier` không confirm + nút 14px, modal Ký gửi/Tồn kho không hỏi khi đóng nhầm, Dexie CDN từ unpkg (khác 5 lib jsdelivr), `revoke next_order_code from public` thiếu (đã vá luôn trong SQL cùng đợt vì cùng file), reconcile/prune nuốt lỗi `continue`, 0 test tự động + 0 gate cú pháp trong `deploy.yml`. |
 
 ## 8. BUG ĐÃ FIX (BÀI HỌC RÚT RA)
 
