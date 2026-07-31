@@ -468,7 +468,16 @@ async function pullAll(showResult) {
     for (const cc of (cloudCustomers || [])) {
       const local = await db.customers.where('uuid').equals(cc.uuid).first();
       if (cc.deleted) {  // SOFT-delete local (vào Thùng rác, khôi phục được) thay vì xóa cứng
-        if (local) { uuidToLocalId[cc.uuid] = local.id; if (!local.deleted_at) await db.customers.update(local.id, { deleted_at: cc.updated_at || nowIso, updated_at: cc.updated_at || nowIso }); }
+        // LWW theo thời gian: chỉ áp lại "đã xóa" nếu bản ghi xóa trên cloud MỚI HƠN lần sửa local gần nhất.
+        // Thiếu điều kiện thời gian (trước đây chỉ check !local.deleted_at): vừa khôi phục local (deleted_at=null,
+        // outbox đang debounce 1.5s chưa kịp đẩy lên) -> 1 pullAll chạy xen vào đọc phải cloud CŨ (vẫn deleted=true)
+        // -> tưởng "chưa xóa cứng" nên tự xóa lại local NGAY LẬP TỨC, xóa luôn bản khôi phục vừa làm.
+        if (local) {
+          uuidToLocalId[cc.uuid] = local.id;
+          if (!local.deleted_at && new Date(cc.updated_at || 0) > new Date(local.updated_at || 0)) {
+            await db.customers.update(local.id, { deleted_at: cc.updated_at || nowIso, updated_at: cc.updated_at || nowIso });
+          }
+        }
         continue;
       }
       if (!local) {
@@ -495,7 +504,14 @@ async function pullAll(showResult) {
     for (const co of (cloudOrders || [])) {
       const local = await db.orders.where('uuid').equals(co.uuid).first();
       if (co.deleted) {
-        if (local) { orderUuidToLocalId[co.uuid] = local.id; if (!local.deleted_at) await db.orders.update(local.id, { deleted_at: co.updated_at || nowIso, updated_at: co.updated_at || nowIso }); }
+        // LWW theo thời gian — xem comment chi tiết ở nhánh customers phía trên. Đây là mắt xích quan trọng
+        // nhất vì đơn hàng là bảng khôi phục nhiều nhất trong Thùng rác.
+        if (local) {
+          orderUuidToLocalId[co.uuid] = local.id;
+          if (!local.deleted_at && new Date(co.updated_at || 0) > new Date(local.updated_at || 0)) {
+            await db.orders.update(local.id, { deleted_at: co.updated_at || nowIso, updated_at: co.updated_at || nowIso });
+          }
+        }
         continue;
       }
       const fields = {
@@ -518,7 +534,7 @@ async function pullAll(showResult) {
     if (e3) throw e3;
     for (const ci of (cloudInv || [])) {
       const local = await db.inventory.where('uuid').equals(ci.uuid).first();
-      if (ci.deleted) { if (local && !local.deleted_at) await db.inventory.update(local.id, { deleted_at: ci.updated_at || nowIso, updated_at: ci.updated_at || nowIso }); continue; }
+      if (ci.deleted) { if (local && !local.deleted_at && new Date(ci.updated_at || 0) > new Date(local.updated_at || 0)) await db.inventory.update(local.id, { deleted_at: ci.updated_at || nowIso, updated_at: ci.updated_at || nowIso }); continue; }
       const invFields = { show_day: ci.show_day, ticket_tier: ci.ticket_tier, total_stock: ci.total_stock, cost_price: ci.cost_price, updated_at: ci.updated_at, deleted_at: null };
       if (!local) await db.inventory.add({ uuid: ci.uuid, ...invFields });
       else if (new Date(ci.updated_at || 0) > new Date(local.updated_at || 0)) await db.inventory.update(local.id, invFields);
@@ -529,7 +545,7 @@ async function pullAll(showResult) {
     if (e4) throw e4;
     for (const cr of (cloudRes || [])) {
       const local = await db.resales.where('uuid').equals(cr.uuid).first();
-      if (cr.deleted) { if (local && !local.deleted_at) await db.resales.update(local.id, { deleted_at: cr.updated_at || nowIso, updated_at: cr.updated_at || nowIso }); continue; }
+      if (cr.deleted) { if (local && !local.deleted_at && new Date(cr.updated_at || 0) > new Date(local.updated_at || 0)) await db.resales.update(local.id, { deleted_at: cr.updated_at || nowIso, updated_at: cr.updated_at || nowIso }); continue; }
       const fields = {
         order_id: orderUuidToLocalId[cr.order_uuid] || (local ? local.order_id : null),
         order_code: cr.order_code, customer_name: cr.customer_name, customer_phone: cr.customer_phone,
