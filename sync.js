@@ -454,9 +454,12 @@ async function snapshotHistory(table, oldRec, source) {
 // ===== KÉO DỮ LIỆU CLOUD VỀ & MERGE =====
 let _pullBusy = false; // chặn 2 pullAll chạy CHỒNG NHAU (online + visibilitychange + interval 30s có thể bắn gần như cùng lúc)
                         // -> nếu không chặn: 2 vòng cùng thấy "chưa có local", cùng .add() -> sinh 2 dòng TRÙNG uuid, không tự sửa được.
+// R9 audit: kết quả LẦN PULL GẦN NHẤT — updateSyncStatus() đọc cờ này để KHÔNG báo "Đã đồng bộ"
+// khi thật ra lần kéo dữ liệu vừa rồi thất bại (token hết hạn/RLS chặn/mạng chập chờn).
+let _lastPullOk = true;
 async function pullAll(showResult) {
   if (!sbReady) return;
-  if (_pullBusy) return;
+  if (_pullBusy || reconciling) return;
   _pullBusy = true;
   pulling++;
   try {
@@ -574,16 +577,21 @@ async function pullAll(showResult) {
       }
     }
 
+    _lastPullOk = true; // mọi bước fetch/merge cloud ở trên đã xong KHÔNG lỗi
     if (typeof refreshAll === 'function') await refreshAll();
     if (typeof loadSettings === 'function') await loadSettings();
     if (showResult) showToast('Đã đồng bộ xong với cloud!', 'success');
   } catch (e) {
     console.error('pull fail', e);
+    _lastPullOk = false;
     if (showResult) showToast('Lỗi đồng bộ: ' + (e.message || e), 'error');
     updateSyncStatus('error');
   } finally {
     pulling--;
     _pullBusy = false;
+    // Gọi lại KHÔNG tham số ở đây là cố ý (cần tính lại pending/parked mới nhất) — trước đây
+    // dòng này ghi đè mất trạng thái 'error' vừa set ở catch{}. Giờ updateSyncStatus() tự đọc
+    // _lastPullOk nên dù gọi không tham số, lỗi vẫn hiển thị đúng (xem updateSyncStatus()).
     updateSyncStatus();
   }
 }
@@ -649,6 +657,11 @@ async function connectSupabase(silent) {
     if (error) throw error;
     sbReady = true;
     updateSyncStatus();
+
+    // R9 audit: RLS giờ khoá theo is_owner() (xem supabase-setup.sql). Tài khoản authenticated
+    // ĐẦU TIÊN gọi claim_owner() được nhận quyền chủ vĩnh viễn; gọi lại ở các lần đăng nhập
+    // sau là NO-OP (hàm chỉ set khi app_owner.uid còn NULL) nên an toàn để gọi mỗi lần connect.
+    try { await sb.rpc('claim_owner'); } catch (e) { console.warn('claim_owner', e.message); }
 
     // Auto-migrate: nếu vẫn còn plaintext → encrypt ngay và xóa
     if (_sessionKey) {
@@ -803,6 +816,9 @@ async function updateSyncStatus(forced) {
     text = hasCfg ? 'Mất kết nối cloud — dữ liệu lưu tạm, sẽ tự đẩy lên khi có mạng' : 'Chế độ local (chưa bật đồng bộ cloud)';
   }
   else if (!navigator.onLine) { state = 'offline'; text = `Offline — ${pending} thay đổi chờ đẩy lên`; }
+  // R9 audit: trước đây pullAll() lỗi xong vẫn hiện xanh vì finally{} gọi updateSyncStatus()
+  // không tham số ngay sau đó, ghi đè mất updateSyncStatus('error') vừa set trong catch{}.
+  else if (!_lastPullOk) { state = 'error'; text = 'Lần đồng bộ gần nhất thất bại — sẽ tự thử lại'; }
   else if (pending > 0) { state = 'pending'; text = `Đang đồng bộ ${pending} thay đổi...`; }
   else { state = 'synced'; text = 'Đã đồng bộ với cloud'; }
   dot.dataset.state = state;
