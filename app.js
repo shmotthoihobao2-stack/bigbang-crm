@@ -1724,7 +1724,22 @@ async function refreshDashboard() {
     if (o.status === 'đã thanh toán đủ' || o.status === 'đã giao vé') return s + (o.total || 0);
     return s + (o.deposit_amount || 0);
   }, 0);
-  const totalRemaining = totalRevenue - totalReceived;
+  // "Còn phải thu" = Doanh thu - Đã thu. Nghiệp vụ thật: nhận cọc GIỮ CHỖ trước khi biết SL/giá vé
+  // (chưa mở bán) -> đơn để trống Số lượng/Đơn giá -> Tổng tiền = 0 nhưng Đã cọc > 0 -> phép trừ ra
+  // ÂM (vd -65,5tr), đọc như "nợ âm" rất dễ hiểu lầm dù về bản chất chỉ là Tổng tiền CHƯA XÁC ĐỊNH,
+  // không phải thu vượt. Chặn số âm ở đây (chỉ sửa HIỂN THỊ, giữ nguyên totalRevenue/totalReceived
+  // cho các chỗ tính khác) + cảnh báo riêng để anh biết có bao nhiêu đơn đang ở tình trạng này.
+  const totalRemaining = Math.max(0, totalRevenue - totalReceived);
+  const depositOnlyOrders = confirmedOrders.filter(o => !o.total && (o.deposit_amount || 0) > 0);
+  const missingTotalEl = document.getElementById('missing-total-warning');
+  if (missingTotalEl) {
+    if (depositOnlyOrders.length > 0) {
+      const depositSum = depositOnlyOrders.reduce((s, o) => s + (o.deposit_amount || 0), 0);
+      missingTotalEl.textContent = `⚠️ ${depositOnlyOrders.length} đơn đã nhận cọc ${formatVNDShort(depositSum)} nhưng chưa nhập Số lượng/Đơn giá — Doanh thu tạm thời CHƯA gồm các đơn này`;
+    } else {
+      missingTotalEl.textContent = '';
+    }
+  }
 
   // Chi phí vốn: ưu tiên giá vốn ghi TRÊN ĐƠN (chính xác từng lần đặt).
   // Đơn cũ chưa có cost_price → fallback giá nhập gợi ý ở Tồn kho (đơn 'cả 2 ngày' = vốn Day1 + Day2).
