@@ -1,0 +1,14 @@
+# Secrets & Keys
+.env
+*.pem
+*.key
+
+# Backups & Temporary files
+*-back-up*
+*.zip
+*.log
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/

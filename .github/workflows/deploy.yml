@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Kiểm tra cú pháp JS & Chạy unit test tính tiền
+        run: |
+          echo "🔍 Kiểm tra cú pháp app.js và sync.js..."
+          node --check app.js sync.js
+          echo "🧪 Chạy bộ test tính tiền..."
+          node tests/money.test.js
+          echo "✅ Tất cả kiểm tra an toàn đều đạt chuẩn!"
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
