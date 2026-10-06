@@ -32,7 +32,7 @@ let chartOrdersByDate = null;
 let chartTier = null;
 
 // ===== DEFAULT SETTINGS =====
-const DEFAULT_TIERS = ['VIP Soundcheck', 'VIP', 'CAT1', 'CAT2', 'CAT3'];
+const DEFAULT_TIERS = ['Ultimate VIP', 'Diamond VIP', 'Gold VIP', 'Premium', 'Standing Zone', 'CAT 1', 'CAT 2', 'CAT 3', 'CAT 4', 'CAT 5'];
 const DEFAULT_PASSWORD = 'bigbang2026';
 const STATUSES = ['mới', 'đã cọc', 'đã thanh toán đủ', 'đã giao vé', 'hoàn cọc', 'hủy'];
 const RESALE_STATUSES = ['chờ rao', 'đang rao', 'đã pass', 'hủy ký gửi'];
@@ -87,6 +87,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const tiers = await db.settings.get('ticketTiers');
   if (!tiers) {
     await db.settings.put({ key: 'ticketTiers', value: JSON.stringify(DEFAULT_TIERS) });
+  } else {
+    // Migration: Nếu đang dùng danh sách mặc định cũ chưa tùy biến, tự động nâng cấp
+    if (tiers.value === '["VIP Soundcheck","VIP","CAT1","CAT2","CAT3"]') {
+      await db.settings.put({ key: 'ticketTiers', value: JSON.stringify(DEFAULT_TIERS) });
+    }
   }
   const shopName = await db.settings.get('shopName');
   if (!shopName) {
