@@ -390,7 +390,7 @@
           </div>
           <div class="form-row">
             <div>
-              <input type="text" class="form-input" id="new-tier-name" placeholder="Tên hạng vé mới...">
+              <input type="text" class="form-input" id="new-tier-name" placeholder="Tên hạng vé mới..." onkeypress="if(event.key==='Enter') addTier()">
             </div>
             <div>
               <button class="btn btn-gold btn-block" onclick="addTier()">+ Thêm hạng</button>
