@@ -564,8 +564,14 @@ async function pullAll(showResult) {
     // 5. Settings dùng chung (hạng vé, tên shop, orderCounter...)
     const { data: cloudSettings, error: e5 } = await sb.from('app_settings').select('*');
     if (e5) throw e5;
+    // Setting local đang CHỜ đẩy lên (outbox) = bản user vừa sửa -> KHÔNG để cloud cũ ghi đè (lỗi "sửa xong tự biến mất")
+    const _pendingSettingKeys = new Set();
+    (await db.outbox.where('table_name').equals('app_settings').toArray()).forEach(i => {
+      try { _pendingSettingKeys.add(JSON.parse(i.payload).key); } catch (e) {}
+    });
     for (const cs of (cloudSettings || [])) {
       if (SETTINGS_NO_SYNC.includes(cs.key)) continue;
+      if (_pendingSettingKeys.has(cs.key) && cs.key !== 'orderCounter') continue;
       const local = await db.settings.get(cs.key);
       if (!local) await db.settings.put({ key: cs.key, value: cs.value });
       else if (cs.key === 'orderCounter') {
