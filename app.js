@@ -33,6 +33,10 @@ let chartTier = null;
 
 // ===== DEFAULT SETTINGS =====
 const DEFAULT_TIERS = ['Ultimate VIP', 'Diamond VIP', 'Gold VIP', 'Premium', 'Standing Zone', 'CAT 1', 'CAT 2', 'CAT 3', 'CAT 4', 'CAT 5'];
+// Trả về giá trị JSON 10 hạng mới nếu `stored` đúng là 5 hạng mặc định CŨ (chưa tùy biến); ngược lại null (không đụng).
+function nextTicketTiersValue(stored) {
+  return stored === '["VIP Soundcheck","VIP","CAT1","CAT2","CAT3"]' ? JSON.stringify(DEFAULT_TIERS) : null;
+}
 const DEFAULT_PASSWORD = 'bigbang2026';
 const STATUSES = ['mới', 'đã cọc', 'đã thanh toán đủ', 'đã giao vé', 'hoàn cọc', 'hủy'];
 const RESALE_STATUSES = ['chờ rao', 'đang rao', 'đã pass', 'hủy ký gửi'];
@@ -89,8 +93,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await db.settings.put({ key: 'ticketTiers', value: JSON.stringify(DEFAULT_TIERS) });
   } else {
     // Migration: Nếu đang dùng danh sách mặc định cũ chưa tùy biến, tự động nâng cấp
-    if (tiers.value === '["VIP Soundcheck","VIP","CAT1","CAT2","CAT3"]') {
-      await db.settings.put({ key: 'ticketTiers', value: JSON.stringify(DEFAULT_TIERS) });
+    const upgraded = nextTicketTiersValue(tiers.value);
+    if (upgraded) {
+      await db.settings.put({ key: 'ticketTiers', value: upgraded });
+      // Hook db.settings bị bỏ qua lúc khởi động (đang pull) -> không tự vào hàng chờ -> cloud giữ 5 hạng cũ
+      // và kéo ngược về ghi đè (lỗi 09/10/2026). Ghi hàng chờ TƯỜNG MINH để chắc chắn đẩy lên cloud.
+      if (typeof enqueue === 'function') await enqueue('app_settings', 'upsert', { key: 'ticketTiers', value: upgraded });
     }
   }
   const shopName = await db.settings.get('shopName');
