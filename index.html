@@ -662,8 +662,8 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <!-- Seat number -->
         <div class="form-group">
           <label class="form-label">Số ghế / vị trí</label>
-          <input type="text" class="form-input" id="order-seat" placeholder="VD: A1, A2 hoặc Khu B Hàng 3 Ghế 15-16">
-          <div class="form-hint">Ghi rõ số ghế để giao đúng vé cho khách</div>
+          <input type="text" class="form-input" id="order-seat" placeholder="VD: A1, A2 hoặc Khu B Hàng 3 Ghế 15-16" oninput="checkInventory()">
+          <div class="form-hint">Ghi rõ số ghế để giao đúng vé cho khách. <strong>Ô này có chữ = đơn ĐÃ CÓ VÉ trong tay</strong> (trừ vào tồn kho); để trống = đang chờ vé. Nên ghi dạng: Hạng · Hàng · Ghế</div>
         </div>
 
         <!-- Combo / dịch vụ kèm -->
@@ -693,7 +693,7 @@ Bạn cứ hỏi thêm gì mình trả lời thẳng nhé 😊</div>
         <!-- Status -->
         <div class="form-group">
           <label class="form-label">Trạng thái</label>
-          <select class="form-select" id="order-status">
+          <select class="form-select" id="order-status" onchange="checkInventory()">
             <option value="mới">Mới</option>
             <option value="đã cọc">Đã cọc</option>
             <option value="đã thanh toán đủ">Đã thanh toán đủ</option>

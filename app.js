@@ -626,27 +626,30 @@ async function checkInventory() {
   // so sánh đúng với đơn đang tạo/sửa.
   const qty = parseInt(document.getElementById('order-qty')?.value) || 0;
 
+  // 10/10/2026: đơn đang nhập chỉ TRỪ TỒN khi vé đã nằm trong tay (đã ghi ghế hoặc "đã giao vé"). Đơn mới cọc/chờ vé thì không.
+  const seatVal = (document.getElementById('order-seat')?.value || '').trim();
+  const formStatus = document.getElementById('order-status')?.value || '';
+  const willHoldTicket = orderHasTicket({ status: formStatus, seat_number: seatVal });
+
   for (const d of days) {
     const inv = await db.inventory.where({ show_day: d, ticket_tier: tier }).first();
-    // Không ôm vé: hạng để trống/0 = không giới hạn → bỏ qua cảnh báo
+    // Tổng kho trống/0 = ∞ (chưa theo dõi) → bỏ qua cảnh báo
     if (inv && inv.total_stock > 0) {
-      let sold = await countSold(d, tier);
-      if (editingOrder && editingOrder.ticket_tier === tier && ACTIVE_STATUSES.includes(editingOrder.status)
-          && (editingOrder.show_day === d || editingOrder.show_day === 'both')) {
-        sold -= (editingOrder.quantity || 0);
-      }
-      const remaining = inv.total_stock - sold;
-      if (remaining <= 0) {
+      const dayOrders = await db.orders.where('show_day').anyOf([d, 'both']).toArray();
+      // Đang SỬA đơn: bỏ chính đơn này ra khỏi số đã có (tránh cảnh báo sai, kể cả khi đổi hạng/ngày)
+      const heldOthers = stockCounts(dayOrders.filter(o => !(editingOrder && o.id === editingOrder.id)), d, tier).held;
+      const w = ticketFitWarning({ total: inv.total_stock, heldOthers, qty, willHoldTicket });
+      if (w.level === 'out') {
         warningEl.classList.remove('hidden');
-        warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Đã hết vé! (${sold}/${inv.total_stock})`;
+        warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Đã hết vé! (${heldOthers}/${inv.total_stock} vé đã có người giữ)`;
         return;
-      } else if (qty > remaining) {
+      } else if (w.level === 'exceed') {
         warningEl.classList.remove('hidden');
-        warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Chỉ còn ${remaining} vé nhưng đang nhập ${qty} vé — vượt ${qty - remaining} vé!`;
+        warningText.textContent = `⚠️ ${showDayLabel(d)} — ${tier}: Chỉ còn ${w.remaining} vé nhưng đang nhập ${qty} vé — vượt ${w.over} vé!`;
         return;
-      } else if (remaining <= 3) {
+      } else if (w.level === 'low') {
         warningEl.classList.remove('hidden');
-        warningText.textContent = `Còn lại ${remaining} vé ${tier} cho ${showDayLabel(d)}`;
+        warningText.textContent = `Còn lại ${w.remaining} vé ${tier} cho ${showDayLabel(d)}`;
         return;
       }
     }
@@ -667,6 +670,54 @@ async function countSold(showDay, tier) {
     .where('show_day').anyOf([showDay, 'both'])
     .toArray();
   return soldFromOrders(orders, showDay, tier);
+}
+
+// ===== TỒN KHO THEO "VÉ ĐÃ CÓ TRONG TAY" (10/10/2026, yêu cầu anh Quân: nhập vé nào vào, có sẵn thì mới tính tồn) =====
+// "Đã có vé" = đơn còn hiệu lực + (đã giao vé HOẶC đã ghi ghế). Đơn đã cọc/đã thanh toán đủ mà CHƯA ghế = "chờ vé":
+// vẫn là khách thật nhưng KHÔNG trừ tồn (vé chưa nằm trong tay). Tổng kho 0/trống vẫn = ∞ như cũ.
+// Không đổi schema/DB. Có test: tests/inventory.test.js
+function orderHasTicket(o) {
+  if (!o || o.deleted_at || !ACTIVE_STATUSES.includes(o.status)) return false;
+  return o.status === 'đã giao vé' || !!(o.seat_number && String(o.seat_number).trim());
+}
+
+// held = vé đã có (đã ghi ghế/đã giao), waiting = vé chờ (đã cọc, chưa ghế). sold = held + waiting = soldFromOrders cũ.
+function stockCounts(orders, showDay, tier) {
+  let held = 0, waiting = 0;
+  for (const o of orders) {
+    if (!((o.show_day === showDay || o.show_day === 'both') && o.ticket_tier === tier)) continue;
+    if (o.deleted_at || !ACTIVE_STATUSES.includes(o.status)) continue;
+    if (orderHasTicket(o)) held += (o.quantity || 0); else waiting += (o.quantity || 0);
+  }
+  return { held, waiting, sold: held + waiting };
+}
+
+// Số hiện trên màn Tồn kho. need = vé còn phải mua thêm cho khách đang chờ; over = đã ghi ghế nhiều hơn số vé đã nhập.
+function stockStatus(totalStock, held, waiting) {
+  if (!totalStock || totalStock <= 0) return { unlimited: true, remaining: null, need: 0, over: 0 };
+  const remaining = totalStock - held;
+  return { unlimited: false, remaining, need: Math.max(0, waiting - Math.max(0, remaining)), over: Math.max(0, -remaining) };
+}
+
+// Cảnh báo lúc nhập/sửa đơn: chỉ đơn SẼ CÓ VÉ (có ghế / đã giao) mới bị so với số vé đã nhập.
+function ticketFitWarning({ total, heldOthers, qty, willHoldTicket }) {
+  if (!willHoldTicket || !total || total <= 0) return { level: 'none' };
+  const remaining = total - heldOthers;
+  if (remaining <= 0) return { level: 'out', remaining };
+  if (qty > remaining) return { level: 'exceed', remaining, over: qty - remaining };
+  if (remaining <= 3) return { level: 'low', remaining };
+  return { level: 'none', remaining };
+}
+
+// Danh sách hạng hiện trên Tồn kho = hạng trong Cài đặt + hạng CŨ còn đơn đang hiệu lực (vd CAT1/CAT2/VIP Soundcheck
+// sau khi nâng 5→10 hạng). Chỉ HIỂN THỊ, không đổi/di chuyển dữ liệu. Hạng trong Cài đặt luôn đứng trước (giữ nguyên chỉ số).
+function inventoryTiers(orders, tiers) {
+  const out = tiers.slice();
+  for (const o of orders) {
+    if (o.deleted_at || !ACTIVE_STATUSES.includes(o.status) || !o.ticket_tier) continue;
+    if (!out.includes(o.ticket_tier)) out.push(o.ticket_tier);
+  }
+  return out;
 }
 
 // Gợi ý giá nhập từ Tồn kho (chỉ điền khi ô đang trống, không đè giá user gõ tay)
@@ -1472,7 +1523,9 @@ async function refreshInventory() {
   // Snapshot: load orders + customers 1 LẦN cho cả loop (trước đây query ~20 lần/lần render — N+1).
   const allOrders = await db.orders.toArray();
   const customerMap = toMap(await db.customers.toArray());
-  inventorySnapshot = { allOrders, customerMap, tiers };
+  // Hạng CŨ còn đơn (CAT1/CAT2/VIP Soundcheck...) cũng hiện trên Tồn kho — trước đây các đơn này không nằm ở dòng nào.
+  const tiersAll = inventoryTiers(allOrders, tiers);
+  inventorySnapshot = { allOrders, customerMap, tiers: tiersAll };
 
   for (const day of days) {
     const containerId = `inventory-${day}`;
@@ -1481,23 +1534,32 @@ async function refreshInventory() {
     const headerHTML = container.querySelector('.inventory-row.header')?.outerHTML || '';
 
     let rows = '';
-    for (let ti = 0; ti < tiers.length; ti++) {
-      const tier = tiers[ti];
+    for (let ti = 0; ti < tiersAll.length; ti++) {
+      const tier = tiersAll[ti];
+      const isLegacyTier = !tiers.includes(tier);
       const inv = await db.inventory.where({ show_day: day, ticket_tier: tier }).first();
       const totalStock = inv ? inv.total_stock : 0;
-      const sold = soldFromOrders(allOrders, day, tier);
-      const remaining = totalStock - sold;
+      const counts = stockCounts(allOrders, day, tier);
+      const st = stockStatus(totalStock, counts.held, counts.waiting);
       const costPrice = inv ? inv.cost_price : 0;
 
-      // Không ôm vé: tổng để trống/0 = không giới hạn → không cảnh báo
-      const unlimited = !totalStock || totalStock <= 0;
+      // Tổng kho trống/0 = ∞ (chưa theo dõi vé có sẵn) → hiện như cũ, không cảnh báo.
+      // Có nhập số vé = vé ĐANG CÓ TRONG TAY: còn lại = vé có sẵn − vé đã ghi ghế/đã giao; đơn chờ vé hiện riêng, không trừ.
+      const unlimited = st.unlimited;
+      const remaining = st.remaining;
       const isDanger = !unlimited && remaining <= 0;
-      const isWarning = !unlimited && remaining < 0;
+      const isWarning = st.over > 0;
 
       if (isWarning) {
         // esc(tier): tên hạng do user tự nhập tự do (addTier) -> phải escape trước khi nhét vào innerHTML (warningsEl bên dưới), chống XSS + vỡ HTML.
-        warnings.push(`${showDayLabel(day)} — ${esc(tier)}: Bán vượt ${Math.abs(remaining)} vé!`);
+        warnings.push(`${showDayLabel(day)} — ${esc(tier)}: Đã ghi ghế ${counts.held} vé nhưng chỉ nhập ${totalStock} vé có sẵn — vượt ${st.over} vé!`);
       }
+      const waitingHTML = (!unlimited && counts.waiting > 0)
+        ? `<div style="grid-column:1/-1;padding:2px 0 6px;font-size:0.73rem">
+             <span style="color:var(--text-muted)">⏳ Chờ vé:</span>
+             <span style="color:var(--gold-primary)">${counts.waiting} vé (đã cọc, chưa ghi ghế)${st.need > 0 ? ' · cần mua thêm ' + st.need : ''}</span>
+           </div>`
+        : '';
 
       // Lấy danh sách ghế đã bán cho hạng này (từ snapshot, không query lại)
       const tierOrders = allOrders
@@ -1526,20 +1588,22 @@ async function refreshInventory() {
         <div class="inventory-row">
           <div>
             <span class="inventory-tier">${esc(tier)}</span>
+            ${isLegacyTier ? '<span class="inventory-day-label">hạng cũ</span>' : ''}
             ${costPrice ? '<span class="inventory-day-label">Giá nhập: ' + formatVND(costPrice) + '</span>' : ''}
           </div>
           <div>
             <span class="inventory-number">${unlimited ? '∞' : totalStock}</span>
-            <span class="inventory-sub">tổng</span>
+            <span class="inventory-sub">${unlimited ? 'tổng' : 'vé có sẵn'}</span>
           </div>
           <div>
-            <span class="inventory-number sold">${sold}</span>
-            <span class="inventory-sub">đã bán</span>
+            <span class="inventory-number sold">${unlimited ? counts.sold : counts.held}</span>
+            <span class="inventory-sub">${unlimited ? 'đã bán' : 'đã có vé'}</span>
           </div>
           <div>
             <span class="inventory-number ${isDanger ? 'danger' : 'remaining'}">${unlimited ? '∞' : remaining}</span>
             <span class="inventory-sub">còn lại</span>
           </div>
+          ${waitingHTML}
           ${seatHTML}
           ${custSummaryHTML}
         </div>
@@ -1572,8 +1636,8 @@ async function refreshInventory() {
       flexCard.classList.remove('hidden');
       const flexHeaderHTML = flexContainer.querySelector('.inventory-row.header')?.outerHTML || '';
       let flexRows = '';
-      for (let ti = 0; ti < tiers.length; ti++) {
-        const tier = tiers[ti];
+      for (let ti = 0; ti < tiersAll.length; ti++) {
+        const tier = tiersAll[ti];
         const tierFlexOrders = flexOrders.filter(o => o.ticket_tier === tier);
         if (tierFlexOrders.length === 0) continue;
         // Đếm theo VÉ (quantity), không phải theo SỐ ĐƠN — 1 đơn có thể mua nhiều vé.
@@ -1650,7 +1714,8 @@ function closeTierCustomersModal() {
 
 // ===== INVENTORY MODAL =====
 async function openInventoryModal() {
-  const tiers = await getTiers();
+  // Gồm cả hạng CŨ còn đơn (inventoryTiers) để nhập được số vé đang có cho chúng; saveInventory chỉ ghi những dòng hiện ở đây.
+  const tiers = inventoryTiers(await db.orders.toArray(), await getTiers());
   const days = ['day1', 'day2'];
   const modal = document.getElementById('inventory-modal');
   const body = document.getElementById('inventory-form-body');
@@ -1668,8 +1733,8 @@ async function openInventoryModal() {
       html += `
         <div class="form-row" style="margin-bottom:var(--space-sm)">
           <div class="form-group" style="margin-bottom:0">
-            <label class="form-label">${esc(tier)} — Tổng vé (trống = ∞)</label>
-            <input type="number" class="form-input inv-stock" data-day="${day}" data-tier="${esc(tier)}" value="${totalStock || ''}" min="0" placeholder="∞ không giới hạn">
+            <label class="form-label">${esc(tier)} — Vé đang có sẵn (trống = chưa theo dõi)</label>
+            <input type="number" class="form-input inv-stock" data-day="${day}" data-tier="${esc(tier)}" value="${totalStock || ''}" min="0" placeholder="∞ chưa theo dõi">
           </div>
           <div class="form-group" style="margin-bottom:0">
             <label class="form-label">${esc(tier)} — Giá nhập gợi ý</label>
@@ -2279,18 +2344,22 @@ async function exportCSV() {
     const inventory = await db.inventory.toArray();
     const invData = [];
     for (const inv of inventory) {
-      const sold = await countSold(inv.show_day, inv.ticket_tier);
+      // 10/10/2026: tách "đã có vé" (đã ghi ghế/đã giao) và "chờ vé" (đã cọc chưa ghế); tổng kho 0 = ∞ như màn hình.
+      const c = stockCounts(orders, inv.show_day, inv.ticket_tier);
+      const st = stockStatus(inv.total_stock, c.held, c.waiting);
       invData.push({
         'Ngày show': showDayLabel(inv.show_day),
         'Hạng vé': inv.ticket_tier,
-        'Tổng kho': inv.total_stock,
-        'Đã bán': sold,
-        'Còn lại': inv.total_stock - sold,
+        'Tổng kho': st.unlimited ? '∞' : inv.total_stock,
+        'Đã bán': c.sold,
+        'Đã có vé': c.held,
+        'Chờ vé': c.waiting,
+        'Còn lại': st.unlimited ? '∞' : st.remaining,
         'Giá vốn': inv.cost_price || 0
       });
     }
     const ws2 = XLSX.utils.json_to_sheet(invData);
-    ws2['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }];
+    ws2['!cols'] = [{ wch: 18 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }];
 
     // Tạo sheet Tổng hợp
     const confirmed = orders.filter(o => ACTIVE_STATUSES.includes(o.status));

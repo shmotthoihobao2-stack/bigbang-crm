@@ -32,6 +32,8 @@ jobs:
           node tests/money.test.js
           echo "🧪 Chạy bộ test nâng cấp hạng vé..."
           node tests/tiers.test.js
+          echo "🧪 Chạy bộ test tồn kho theo vé đã có..."
+          node tests/inventory.test.js
           echo "✅ Tất cả kiểm tra an toàn đều đạt chuẩn!"
 
       - name: Setup Pages
