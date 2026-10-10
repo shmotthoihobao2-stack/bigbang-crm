@@ -21,9 +21,8 @@ const src = [
   grab(/function stockCounts\([\s\S]*?\n\}/, 'stockCounts'),
   grab(/function stockStatus\([\s\S]*?\n\}/, 'stockStatus'),
   grab(/function ticketFitWarning\([\s\S]*?\n\}/, 'ticketFitWarning'),
-  grab(/function inventoryTiers\([\s\S]*?\n\}/, 'inventoryTiers'),
 ].join('\n');
-const F = new Function(src + '; return { soldFromOrders, orderHasTicket, stockCounts, stockStatus, ticketFitWarning, inventoryTiers };')();
+const F = new Function(src + '; return { soldFromOrders, orderHasTicket, stockCounts, stockStatus, ticketFitWarning };')();
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log('  ✅ ' + name + ' PASS'); };
@@ -111,32 +110,24 @@ t('14. có ghế, hết vé -> "out"; vượt -> "exceed" (số vượt); còn �
   assert.strictEqual(F.ticketFitWarning({ total: 20, heldOthers: 3, qty: 2, willHoldTicket: true }).level, 'none');
 });
 
-// ── inventoryTiers: hạng cũ vẫn hiện trên Tồn kho ──
-t('15. hạng CŨ có đơn đang hiệu lực được thêm SAU 10 hạng mới, không trùng; đơn hủy/xoá không kéo hạng vào', () => {
-  const tiers = ['Gold VIP', 'CAT 1'];
-  const os = [O({ ticket_tier: 'CAT1' }), O({ ticket_tier: 'CAT1' }), O({ ticket_tier: 'VIP Soundcheck' }),
-    O({ ticket_tier: 'Ma', status: 'hủy' }), O({ ticket_tier: 'Ma2', deleted_at: '2026-01-01' }), O({ ticket_tier: 'Gold VIP' })];
-  assert.deepStrictEqual(F.inventoryTiers(os, tiers), ['Gold VIP', 'CAT 1', 'CAT1', 'VIP Soundcheck']);
-  assert.deepStrictEqual(tiers, ['Gold VIP', 'CAT 1'], 'không được sửa mảng đầu vào');
-});
-
 // ── Khoá lỗi gốc: 3 chỗ dùng đếm phải đi qua hàm mới, không quay về đếm cũ ──
 const body = (name) => { const m = appCode.match(new RegExp('(?:async )?function ' + name + '\\([\\s\\S]*?\\n\\}')); if (!m) { console.error('❌ thiếu hàm ' + name); process.exit(1); } return m[0]; };
-t('16. checkInventory dùng orderHasTicket/stockCounts/ticketFitWarning, không còn countSold', () => {
+t('15. checkInventory dùng orderHasTicket/stockCounts/ticketFitWarning, không còn countSold', () => {
   const b = body('checkInventory');
   assert.ok(/ticketFitWarning\(/.test(b) && /stockCounts\(/.test(b) && /orderHasTicket\(/.test(b), 'checkInventory chưa dùng hàm mới');
   assert.ok(!/countSold\(/.test(b), 'checkInventory vẫn đếm bằng countSold cũ');
 });
-t('17. refreshInventory dùng stockCounts + stockStatus + inventoryTiers (hạng cũ lên màn Tồn kho)', () => {
+t('16. refreshInventory dùng stockCounts + stockStatus (và KHÔNG đưa hạng cũ lên màn Tồn kho)', () => {
   const b = body('refreshInventory');
-  assert.ok(/stockCounts\(/.test(b) && /stockStatus\(/.test(b) && /inventoryTiers\(/.test(b));
+  assert.ok(/stockCounts\(/.test(b) && /stockStatus\(/.test(b));
+  assert.ok(!/inventoryTiers|tiersAll|isLegacyTier/.test(b), 'hạng cũ không được quay lại màn Tồn kho (anh Quân bỏ 10/10)');
 });
-t('18. openInventoryModal liệt kê cả hạng cũ (inventoryTiers) để nhập được số vé cho chúng', () => {
-  assert.ok(/inventoryTiers\(/.test(body('openInventoryModal')));
+t('17. hộp nhập tồn kho chỉ liệt kê hạng trong Cài đặt (không có hạng cũ)', () => {
+  assert.ok(!/inventoryTiers/.test(body('openInventoryModal')));
 });
-t('19. xuất Excel: sheet Tồn kho dùng stockCounts (có cột "Chờ vé")', () => {
+t('18. xuất Excel: sheet Tồn kho dùng stockCounts (có cột "Chờ vé")', () => {
   assert.ok(/stockCounts\(/.test(appCode.slice(appCode.indexOf('Tạo sheet Tồn kho'), appCode.indexOf('Tạo sheet Tổng hợp'))));
   assert.ok(/Chờ vé/.test(appCode.slice(appCode.indexOf('Tạo sheet Tồn kho'), appCode.indexOf('Tạo sheet Tổng hợp'))));
 });
 
-console.log(`\n🎉 ${pass}/19 PASS`);
+console.log(`\n🎉 ${pass}/18 PASS`);

@@ -709,17 +709,6 @@ function ticketFitWarning({ total, heldOthers, qty, willHoldTicket }) {
   return { level: 'none', remaining };
 }
 
-// Danh sách hạng hiện trên Tồn kho = hạng trong Cài đặt + hạng CŨ còn đơn đang hiệu lực (vd CAT1/CAT2/VIP Soundcheck
-// sau khi nâng 5→10 hạng). Chỉ HIỂN THỊ, không đổi/di chuyển dữ liệu. Hạng trong Cài đặt luôn đứng trước (giữ nguyên chỉ số).
-function inventoryTiers(orders, tiers) {
-  const out = tiers.slice();
-  for (const o of orders) {
-    if (o.deleted_at || !ACTIVE_STATUSES.includes(o.status) || !o.ticket_tier) continue;
-    if (!out.includes(o.ticket_tier)) out.push(o.ticket_tier);
-  }
-  return out;
-}
-
 // Gợi ý giá nhập từ Tồn kho (chỉ điền khi ô đang trống, không đè giá user gõ tay)
 async function suggestCostPrice() {
   const costEl = document.getElementById('order-cost');
@@ -1523,9 +1512,7 @@ async function refreshInventory() {
   // Snapshot: load orders + customers 1 LẦN cho cả loop (trước đây query ~20 lần/lần render — N+1).
   const allOrders = await db.orders.toArray();
   const customerMap = toMap(await db.customers.toArray());
-  // Hạng CŨ còn đơn (CAT1/CAT2/VIP Soundcheck...) cũng hiện trên Tồn kho — trước đây các đơn này không nằm ở dòng nào.
-  const tiersAll = inventoryTiers(allOrders, tiers);
-  inventorySnapshot = { allOrders, customerMap, tiers: tiersAll };
+  inventorySnapshot = { allOrders, customerMap, tiers };
 
   for (const day of days) {
     const containerId = `inventory-${day}`;
@@ -1534,9 +1521,8 @@ async function refreshInventory() {
     const headerHTML = container.querySelector('.inventory-row.header')?.outerHTML || '';
 
     let rows = '';
-    for (let ti = 0; ti < tiersAll.length; ti++) {
-      const tier = tiersAll[ti];
-      const isLegacyTier = !tiers.includes(tier);
+    for (let ti = 0; ti < tiers.length; ti++) {
+      const tier = tiers[ti];
       const inv = await db.inventory.where({ show_day: day, ticket_tier: tier }).first();
       const totalStock = inv ? inv.total_stock : 0;
       const counts = stockCounts(allOrders, day, tier);
@@ -1588,7 +1574,6 @@ async function refreshInventory() {
         <div class="inventory-row">
           <div>
             <span class="inventory-tier">${esc(tier)}</span>
-            ${isLegacyTier ? '<span class="inventory-day-label">hạng cũ</span>' : ''}
             ${costPrice ? '<span class="inventory-day-label">Giá nhập: ' + formatVND(costPrice) + '</span>' : ''}
           </div>
           <div>
@@ -1636,8 +1621,8 @@ async function refreshInventory() {
       flexCard.classList.remove('hidden');
       const flexHeaderHTML = flexContainer.querySelector('.inventory-row.header')?.outerHTML || '';
       let flexRows = '';
-      for (let ti = 0; ti < tiersAll.length; ti++) {
-        const tier = tiersAll[ti];
+      for (let ti = 0; ti < tiers.length; ti++) {
+        const tier = tiers[ti];
         const tierFlexOrders = flexOrders.filter(o => o.ticket_tier === tier);
         if (tierFlexOrders.length === 0) continue;
         // Đếm theo VÉ (quantity), không phải theo SỐ ĐƠN — 1 đơn có thể mua nhiều vé.
@@ -1714,8 +1699,7 @@ function closeTierCustomersModal() {
 
 // ===== INVENTORY MODAL =====
 async function openInventoryModal() {
-  // Gồm cả hạng CŨ còn đơn (inventoryTiers) để nhập được số vé đang có cho chúng; saveInventory chỉ ghi những dòng hiện ở đây.
-  const tiers = inventoryTiers(await db.orders.toArray(), await getTiers());
+  const tiers = await getTiers();
   const days = ['day1', 'day2'];
   const modal = document.getElementById('inventory-modal');
   const body = document.getElementById('inventory-form-body');
